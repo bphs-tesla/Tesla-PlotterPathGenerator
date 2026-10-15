@@ -22,7 +22,7 @@ def test_defaults_match_spec():
     assert (cfg.work_width_mm, cfg.work_height_mm) == (200.0, 150.0)
     assert (cfg.pen_down, cfg.pen_up, cfg.pen_delay_s) == ("M3 S90", "M5", 0.2)
     assert (cfg.feed_rate, cfg.baud) == (3000.0, 115200)
-    assert cfg.potrace_path == "C:/potrace.exe"
+    assert cfg.potrace_path == "./potrace/potrace.exe"
     assert (cfg.hatch_pitch, cfg.hatch_levels, cfg.hatch_angle) == (1.0, (20, 100, 180), 45.0)
 
 

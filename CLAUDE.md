@@ -13,11 +13,11 @@ uv run pytest                                  # run all tests
 uv run pytest tests/test_gcode.py::test_generate_empty_lines -v   # single test
 ```
 
-GUI tests run headless via `QT_QPA_PLATFORM=offscreen` (set in `tests/gui/conftest.py`). The end-to-end processing test is skipped unless potrace is installed at `potrace_path` in `config.toml`.
+GUI tests run headless via `QT_QPA_PLATFORM=offscreen` (set in `tests/gui/conftest.py`). The end-to-end processing test is skipped unless the potrace executable at `potrace_path` exists.
 
 ## External requirements
 
-- potrace executable (`potrace_path` in `config.toml`, default `C:/potrace.exe`). Inkscape is not needed: potrace's SVG is rasterized in-process with PyQt6 `QSvgRenderer` (`processing.render_svg`).
+- potrace executable (`potrace_path` in `config.toml`, default `./potrace/potrace.exe`; relative paths resolve from the project folder via `processing.tool_path`, and `potrace/` is git-ignored — download the Windows build into it). Inkscape is not needed: potrace's SVG is rasterized in-process with PyQt6 `QSvgRenderer` (`processing.render_svg`).
 - A webcam (opened with `cv2.CAP_DSHOW`) and an Arduino running GRBL on a COM port.
 
 ## Architecture

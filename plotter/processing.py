@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -15,6 +16,7 @@ from plotter.hatching import hatch_image
 from plotter.lines import Polyline
 
 _TOOL_TIMEOUT_S = 60
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class ProcessingError(Exception):
@@ -50,10 +52,16 @@ def _run(name: str, cmd: list[str], data: bytes) -> bytes:
     return result.stdout
 
 
+def tool_path(path: str) -> Path:
+    """설정의 실행 파일 경로. 상대 경로는 실행한 위치가 아니라 프로젝트 폴더 기준이다."""
+    candidate = Path(path)
+    return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
+
+
 def smooth_edges(binary: np.ndarray, cfg: Config) -> np.ndarray:
     svg = _run(
         "potrace",
-        [cfg.potrace_path, "-s", "-o", "-", "--turdsize", "2", "--alphamax", "1",
+        [str(tool_path(cfg.potrace_path)), "-s", "-o", "-", "--turdsize", "2", "--alphamax", "1",
          "--opttolerance", "0.2", "--unit", "10"],
         to_pbm(binary),
     )

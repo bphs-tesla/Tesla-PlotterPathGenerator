@@ -20,7 +20,7 @@ class Config:
     pen_delay_s: float = 0.2
     feed_rate: float = 3000.0
     baud: int = 115200
-    potrace_path: str = "C:/potrace.exe"
+    potrace_path: str = "./potrace/potrace.exe"  # 상대 경로는 프로젝트 폴더 기준
     hatch_pitch: float = 1.0
     hatch_levels: tuple[int, ...] = (20, 100, 180)
     hatch_angle: float = 45.0

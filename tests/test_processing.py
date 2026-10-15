@@ -6,10 +6,19 @@ import numpy as np
 import pytest
 
 from plotter.config import Config
-from plotter.processing import ProcessingError, preprocess, process, render_svg, smooth_edges, to_pbm
+from plotter.processing import (
+    PROJECT_ROOT,
+    ProcessingError,
+    preprocess,
+    process,
+    render_svg,
+    smooth_edges,
+    to_pbm,
+    tool_path,
+)
 
 CFG = Config()
-TOOLS_INSTALLED = Path(CFG.potrace_path).exists()
+TOOLS_INSTALLED = tool_path(CFG.potrace_path).exists()
 
 # potrace -s 출력과 같은 모양: pt 단위 크기, 뒤집힌 좌표계 transform, 상대 곡선 경로
 POTRACE_STYLE_SVG = b"""<?xml version="1.0" standalone="no"?>
@@ -121,3 +130,19 @@ def test_process_end_to_end_on_non_640_image():
     for line in lines:
         for x, y in line:
             assert 0 <= x <= 320 and 0 <= y <= 240
+
+
+def test_relative_tool_path_is_resolved_from_project_folder():
+    # 상대 경로는 실행한 위치가 아니라 프로젝트 폴더를 기준으로 찾는다
+    assert tool_path("./potrace/potrace.exe") == PROJECT_ROOT / "potrace" / "potrace.exe"
+    assert tool_path("C:/potrace.exe") == Path("C:/potrace.exe")
+
+
+@pytest.mark.skipif(not TOOLS_INSTALLED, reason="potrace가 설치되어 있지 않음")
+def test_potrace_runs_from_any_working_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    gray = np.full((60, 80), 255, np.uint8)
+    gray[15:45, 20:60] = 0
+    edges = smooth_edges(preprocess(gray), CFG)
+    assert edges.shape == (60, 80)
+    assert edges.min() < 64
