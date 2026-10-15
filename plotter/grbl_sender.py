@@ -14,6 +14,8 @@ _SYNC = "G4 P0"  # GRBL은 버퍼가 다 비워진 뒤에 이 명령에 ok를 �
 _FEED_HOLD = b"!"
 _CYCLE_START = b"~"
 _SOFT_RESET = b"\x18"
+_STATUS = b"?"
+_HOLD_POLL_S = 0.2
 
 
 class GrblError(Exception):
@@ -57,11 +59,16 @@ def connect(port_name: str, baud: int, timeout_s: float = 3.0, serial_factory=se
 
 
 class GrblSender:
-    def __init__(self, port, pen_up: str, response_timeout_s: float = 30.0, hold_settle_s: float = 0.5):
+    def __init__(self, port, pen_up: str, response_timeout_s: float = 30.0, hold_timeout_s: float = 10.0,
+                 status_interval_s: float = 1.0):
         self._port = port
         self._pen_up = pen_up
+        # 응답 시간: GRBL이 ok도 상태 보고도 보내지 않은 채 이만큼 지나면 오류
         self._response_timeout_s = response_timeout_s
-        self._hold_settle_s = hold_settle_s
+        # 정지할 때 감속이 끝나기를 기다리는 최대 시간
+        self._hold_timeout_s = hold_timeout_s
+        # ok를 기다리는 동안 이 간격으로 상태(?)를 물어 GRBL이 살아 있는지 확인한다
+        self._status_interval_s = status_interval_s
         # RLock: 같은 스레드가 쓰는 도중 다시 pause()를 불러도 멈추지 않게 한다
         self._write_lock = threading.RLock()
         self._paused = threading.Event()
@@ -81,21 +88,23 @@ class GrblSender:
     def stream(self, commands: list[str], on_progress: Callable[[int, int], None] = lambda done, total: None) -> bool:
         self._stop.clear()
         self._paused.clear()
-        total = len(commands)
         try:
-            for index, command in enumerate(commands, start=1):
-                if not self._send_and_wait(index, command):
-                    self._abort()
-                    return False
-                on_progress(index, total)
-            if not self._send_and_wait(total + 1, _SYNC):
-                self._abort()
-                return False
-            return True
+            finished = self._send_all(commands, on_progress)
         except GrblError:
             with contextlib.suppress(GrblError):
                 self._abort()
             raise
+        if not finished:
+            self._abort()  # 펜을 올리지 못하면 GrblError
+        return finished
+
+    def _send_all(self, commands: list[str], on_progress: Callable[[int, int], None]) -> bool:
+        total = len(commands)
+        for index, command in enumerate(commands, start=1):
+            if not self._send_and_wait(index, command):
+                return False
+            on_progress(index, total)
+        return self._send_and_wait(total + 1, _SYNC)
 
     def _write(self, data: bytes) -> None:
         try:
@@ -110,6 +119,7 @@ class GrblSender:
             return False
         self._write(command.encode("ascii") + b"\n")
         deadline = time.monotonic() + self._response_timeout_s
+        next_status = time.monotonic() + self._status_interval_s
         while True:
             if self._stop.is_set():
                 return False
@@ -118,22 +128,46 @@ class GrblSender:
                 return True
             if reply.startswith(("error", "ALARM")):
                 raise GrblError(f"{index}번째 줄 '{command}'에서 GRBL 오류: {reply}")
-            if reply:
-                continue  # [MSG:...] 같은 상태 메시지는 무시
-            if self._paused.is_set():
-                deadline = time.monotonic() + self._response_timeout_s
-            elif time.monotonic() > deadline:
+            now = time.monotonic()
+            if reply.startswith("<") or self._paused.is_set():
+                # 상태 보고가 오면 아직 그리는 중이다. G4/M5의 ok는 앞선 동작이 끝나야 온다
+                deadline = now + self._response_timeout_s
+            elif now > deadline:
                 raise GrblError(f"{index}번째 줄 '{command}'에 GRBL 응답이 없습니다")
+            if now >= next_status:
+                self._write(_STATUS)
+                next_status = now + self._status_interval_s
+            # 그 밖의 응답([MSG:...] 등)은 무시
+
+    def _wait_for_hold(self) -> None:
+        """멈춤(!) 뒤 감속이 끝날 때까지(Hold:0 또는 Idle) 기다린다."""
+        deadline = time.monotonic() + self._hold_timeout_s
+        next_status = 0.0
+        while time.monotonic() < deadline:
+            if time.monotonic() >= next_status:
+                self._write(_STATUS)
+                next_status = time.monotonic() + _HOLD_POLL_S
+            if _read_text(self._port).startswith(("<Hold:0", "<Idle")):
+                return
 
     def _abort(self) -> None:
-        """멈춤 → 리셋(버퍼 비움) → 펜 올림. 멈춘 뒤 리셋하면 위치를 잃지 않는다."""
+        """멈춤 → 감속 끝까지 대기 → 리셋(버퍼 비움) → 펜 올림. 멈춘 뒤 리셋해야 위치를 잃지 않는다."""
         self._write(_FEED_HOLD)
-        time.sleep(self._hold_settle_s)
+        self._wait_for_hold()
         self._write(_SOFT_RESET)
         _wait_for_banner(self._port, 2.0)
         self._paused.clear()
         self._write(self._pen_up.encode("ascii") + b"\n")
+        reply = ""
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
-            if _read_text(self._port) == "ok":
+            reply = _read_text(self._port)
+            if reply == "ok":
+                return
+            if reply.startswith(("error", "ALARM")):
                 break
+        # 리셋 뒤 알람 상태면 GRBL이 G-code를 거부한다. 위치를 잃었을 수 있으므로 알린다
+        raise GrblError(
+            f"정지했지만 펜을 올리지 못했습니다 (GRBL 응답: {reply or '없음'}). "
+            "GRBL 알람을 풀고($X 또는 $H) 펜 위치를 확인하세요"
+        )
