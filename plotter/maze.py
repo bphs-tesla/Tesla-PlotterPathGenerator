@@ -15,6 +15,12 @@ from plotter.lines import Polyline
 
 CELL_PX = 10  # 한 칸의 크기 (픽셀). G-code에서 작업 영역에 맞춰 늘어나므로 비율만 의미가 있다
 MIN_CELLS = 3  # mazelib는 3칸보다 작은 미로를 만들지 못한다
+MARGIN_PX = CELL_PX  # 입구/출구 화살표를 그릴 바깥 여백
+
+# 화살표 크기 (칸 크기에 대한 비율). 꼬리와 끝은 벽에서 바깥쪽으로 떨어진 거리다
+_ARROW_NEAR = 0.15
+_ARROW_FAR = 0.9
+_ARROW_HEAD = 0.3
 
 
 def generate_maze(cols: int, rows: int, seed: int | None = None) -> np.ndarray:
@@ -63,3 +69,66 @@ def maze_to_lines(grid: np.ndarray) -> list[Polyline]:
             r += 2
 
     return lines
+
+
+def _openings(grid: np.ndarray) -> list[tuple[int, int]]:
+    """바깥 벽에서 뚫린 칸. 왼쪽(같으면 위쪽)에 있는 것이 출발점이 되도록 정렬한다."""
+    rows, cols = grid.shape
+    found = [
+        (r, c)
+        for r in range(rows)
+        for c in range(cols)
+        if grid[r, c] == 0 and (r in (0, rows - 1) or c in (0, cols - 1))
+    ]
+    return sorted(found, key=lambda rc: (rc[1], rc[0]))
+
+
+def _arrow(tail: tuple[float, float], tip: tuple[float, float]) -> list[Polyline]:
+    """몸통 [꼬리, 끝]과 촉 [한쪽, 끝, 다른쪽] 두 선으로 된 화살표."""
+    dx, dy = tip[0] - tail[0], tip[1] - tail[1]
+    length = float(np.hypot(dx, dy))
+    ux, uy = dx / length, dy / length
+    back = _ARROW_HEAD * CELL_PX
+    side = back * 0.6
+    left = (tip[0] - ux * back - uy * side, tip[1] - uy * back + ux * side)
+    right = (tip[0] - ux * back + uy * side, tip[1] - uy * back - ux * side)
+    return [[tail, tip], [left, tip, right]]
+
+
+def maze_arrows(grid: np.ndarray) -> list[Polyline]:
+    """입구 바깥에서 안쪽으로 들어가는 화살표와 출구에서 바깥으로 나가는 화살표.
+
+    좌표는 벽 선과 같은 기준이라 미로 바깥(음수 포함)에 놓인다.
+    """
+    rows, cols = grid.shape
+    arrows: list[Polyline] = []
+    for index, (r, c) in enumerate(_openings(grid)[:2]):
+        # 뚫린 벽 조각의 가운데와 바깥쪽 방향
+        mid = (c * CELL_PX / 2, r * CELL_PX / 2)
+        if c == 0:
+            out = (-1.0, 0.0)
+        elif c == cols - 1:
+            out = (1.0, 0.0)
+        elif r == 0:
+            out = (0.0, -1.0)
+        else:
+            out = (0.0, 1.0)
+
+        def at(distance: float) -> tuple[float, float]:
+            return (float(mid[0] + out[0] * distance * CELL_PX), float(mid[1] + out[1] * distance * CELL_PX))
+
+        near, far = at(_ARROW_NEAR), at(_ARROW_FAR)
+        arrows += _arrow(far, near) if index == 0 else _arrow(near, far)
+    return arrows
+
+
+def maze_drawing(grid: np.ndarray) -> tuple[list[Polyline], int, int]:
+    """벽과 화살표를 여백만큼 옮긴 선 목록과 그림 크기 (너비, 높이)."""
+    rows, cols = grid.shape
+    width = (cols // 2) * CELL_PX + 2 * MARGIN_PX
+    height = (rows // 2) * CELL_PX + 2 * MARGIN_PX
+    lines = [
+        [(x + MARGIN_PX, y + MARGIN_PX) for x, y in line]
+        for line in maze_to_lines(grid) + maze_arrows(grid)
+    ]
+    return lines, width, height

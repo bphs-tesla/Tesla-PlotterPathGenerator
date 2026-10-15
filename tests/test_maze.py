@@ -3,7 +3,7 @@ from collections import deque
 import numpy as np
 import pytest
 
-from plotter.maze import CELL_PX, generate_maze, maze_to_lines
+from plotter.maze import CELL_PX, generate_maze, maze_arrows, maze_drawing, maze_to_lines
 
 
 def unit_edges(lines):
@@ -97,3 +97,57 @@ def test_lines_fit_inside_drawing_size():
         for x, y in line:
             assert 0 <= x <= width and 0 <= y <= height
             assert type(x) is float and type(y) is float
+
+
+def shaft_and_head(arrow_lines):
+    """화살표 하나 = 몸통 [꼬리, 끝] + 촉 [한쪽, 끝, 다른쪽]."""
+    shaft, head = arrow_lines
+    assert len(shaft) == 2 and len(head) == 3
+    assert head[1] == shaft[1]  # 촉은 화살표 끝에 붙는다
+    return shaft
+
+
+def test_arrows_point_into_entrance_and_out_of_exit_on_side_walls():
+    s = float(CELL_PX)
+    grid = np.array([
+        [1, 1, 1, 1, 1],
+        [0, 0, 1, 0, 0],  # 왼쪽 벽과 오른쪽 벽이 뚫려 있다
+        [1, 1, 1, 1, 1],
+    ], np.int8)
+    arrows = maze_arrows(grid)
+    assert len(arrows) == 4
+    (tail, tip) = shaft_and_head(arrows[:2])  # 출발: 왼쪽 바깥에서 안으로
+    assert tail[1] == tip[1] == s / 2
+    assert tail[0] < tip[0] <= 0
+    (tail, tip) = shaft_and_head(arrows[2:])  # 도착: 오른쪽 벽에서 밖으로
+    assert tail[1] == tip[1] == s / 2
+    assert 2 * s <= tail[0] < tip[0]
+
+
+def test_arrows_on_top_and_bottom_walls():
+    s = float(CELL_PX)
+    grid = np.array([
+        [1, 0, 1, 1, 1],  # 위쪽 벽 왼쪽 칸이 뚫림 → 출발
+        [1, 0, 0, 0, 1],
+        [1, 1, 1, 0, 1],  # 아래쪽 벽 오른쪽 칸이 뚫림 → 도착
+    ], np.int8)
+    arrows = maze_arrows(grid)
+    (tail, tip) = shaft_and_head(arrows[:2])
+    assert tail[0] == tip[0] == s / 2
+    assert tail[1] < tip[1] <= 0  # 위에서 아래로 들어간다
+    (tail, tip) = shaft_and_head(arrows[2:])
+    assert tail[0] == tip[0] == 1.5 * s
+    assert s <= tail[1] < tip[1]  # 아래로 나간다
+
+
+def test_drawing_has_margin_for_arrows_and_keeps_everything_inside():
+    grid = generate_maze(8, 5, seed=4)
+    lines, width, height = maze_drawing(grid)
+    assert (width, height) == ((8 + 2) * CELL_PX, (5 + 2) * CELL_PX)
+    walls = maze_to_lines(grid)
+    assert len(lines) == len(walls) + 4
+    # 벽은 여백만큼 옮겨진다
+    assert lines[0] == [(x + CELL_PX, y + CELL_PX) for x, y in walls[0]]
+    for line in lines:
+        for x, y in line:
+            assert 0 <= x <= width and 0 <= y <= height

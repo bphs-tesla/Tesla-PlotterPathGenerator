@@ -28,7 +28,7 @@ from plotter.gui.preview import gray_to_qimage, render_lines
 from plotter.gui.state import AppState, Controls, controls_for
 from plotter.gui.workers import ConnectThread, ProcessThread, SendThread
 from plotter.lines import Polyline
-from plotter.maze import CELL_PX, MIN_CELLS, generate_maze, maze_to_lines
+from plotter.maze import MIN_CELLS, generate_maze, maze_drawing
 
 PREVIEW_SIZE = (480, 360)
 FRAME_INTERVAL_MS = 33
@@ -275,8 +275,9 @@ class MainWindow(QMainWindow):
             return
         cols, rows = self._maze_cols.value(), self._maze_rows.value()
         self._timer.stop()  # 결과 확인 중에는 카메라 미리보기를 멈춘다
-        lines = maze_to_lines(generate_maze(cols, rows))
-        self._image_size = (cols * CELL_PX, rows * CELL_PX)
+        # 벽과 입구/출구 화살표. 화살표가 들어갈 여백만큼 그림이 커진다
+        lines, width, height = maze_drawing(generate_maze(cols, rows))
+        self._image_size = (width, height)
         self._on_processed(lines, label=f"미로 {cols}×{rows}칸, ")
 
     def _on_processed(self, lines: list[Polyline], label: str = "") -> None:

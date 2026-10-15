@@ -137,7 +137,7 @@ def test_maze_button_makes_reviewable_drawing_without_camera(window, tmp_path):
     window._maze_rows.setValue(4)
     window._make_maze()
     assert window._state is AppState.REVIEW
-    assert window._image_size == (6 * CELL_PX, 4 * CELL_PX)
+    assert window._image_size == ((6 + 2) * CELL_PX, (4 + 2) * CELL_PX)  # 화살표 여백 포함
     assert window._lines
     svgs = list((tmp_path / "output").glob("*.svg"))
     gcodes = list((tmp_path / "output").glob("*.gcode"))
