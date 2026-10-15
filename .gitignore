@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# 실행 결과물
+output.svg
+output.gcode

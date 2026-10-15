@@ -1,0 +1,23 @@
+# 플로터 설정. 항목을 지우면 기본값이 쓰입니다.
+
+# 그릴 수 있는 영역 (mm). 그림은 비율을 유지한 채 이 안에 맞춰집니다.
+work_width_mm = 200.0
+work_height_mm = 150.0
+
+# 펜 명령. 서보 GRBL 기본값. Z축이면 예: pen_down = "G1 Z0 F500", pen_up = "G0 Z5"
+pen_down = "M3 S90"
+pen_up = "M5"
+# 펜을 올리고 내린 뒤 기다리는 시간 (초). 0이면 기다리지 않습니다.
+pen_delay_s = 0.2
+
+# 그리기 속도 (mm/분)
+feed_rate = 3000.0
+baud = 115200
+
+potrace_path = 'C:/potrace.exe'
+inkscape_path = 'C:\Program Files\Inkscape\bin\inkscape.exe'
+
+# 해칭: 선 간격(픽셀), 밝기 단계(0~255 오름차순), 각도(도)
+hatch_pitch = 1.0
+hatch_levels = [20, 100, 180]
+hatch_angle = 45.0

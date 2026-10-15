@@ -8,5 +8,18 @@ dependencies = [
     "hatched>=0.2.0",
     "numpy>=2.5.4",
     "opencv-python>=5.0.0.93",
+    "pyqt6>=6.11.0",
+    "pyserial>=3.5",
+    "scikit-image>=0.26.0",
+    "shapely>=2.2.0",
     "svgwrite>=1.4.3",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
