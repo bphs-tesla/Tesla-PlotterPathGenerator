@@ -16,6 +16,7 @@ _CYCLE_START = b"~"
 _SOFT_RESET = b"\x18"
 _STATUS = b"?"
 _HOLD_POLL_S = 0.2
+_WRITE_TIMEOUT_S = 1.0
 
 
 class GrblError(Exception):
@@ -43,7 +44,8 @@ def _wait_for_banner(port, timeout_s: float) -> bool:
 
 def connect(port_name: str, baud: int, timeout_s: float = 3.0, serial_factory=serial.Serial):
     try:
-        port = serial_factory(port_name, baud, timeout=0.2)
+        # write_timeout: 상대가 없는 블루투스 가상 포트는 쓰기가 끝나지 않아 제한 시간이 없으면 영원히 멈춘다
+        port = serial_factory(port_name, baud, timeout=0.2, write_timeout=_WRITE_TIMEOUT_S)
     except serial.SerialException as exc:
         raise GrblError(f"{port_name}을(를) 열 수 없습니다: {exc}") from exc
     try:

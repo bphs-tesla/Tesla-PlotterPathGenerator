@@ -202,13 +202,13 @@ def test_disconnect_raises_grbl_error():
 
 def test_connect_accepts_banner():
     port = FakeGrbl(banner=True)
-    assert connect("COM9", 115200, timeout_s=0.5, serial_factory=lambda name, baud, timeout: port) is port
+    assert connect("COM9", 115200, timeout_s=0.5, serial_factory=lambda name, baud, **kwargs: port) is port
     assert port.writes == []
 
 
 def test_connect_resets_when_banner_missing():
     port = FakeGrbl(banner=False)
-    assert connect("COM9", 115200, timeout_s=0.1, serial_factory=lambda name, baud, timeout: port) is port
+    assert connect("COM9", 115200, timeout_s=0.1, serial_factory=lambda name, baud, **kwargs: port) is port
     assert port.writes == [b"\x18"]
 
 
@@ -216,14 +216,38 @@ def test_connect_fails_without_banner():
     port = FakeGrbl(banner=False, answers_reset=False)
     started = time.monotonic()
     with pytest.raises(GrblError, match="COM9.*GRBL 응답이 없습니다"):
-        connect("COM9", 115200, timeout_s=0.1, serial_factory=lambda name, baud, timeout: port)
+        connect("COM9", 115200, timeout_s=0.1, serial_factory=lambda name, baud, **kwargs: port)
     assert time.monotonic() - started < 2
     assert port.closed
 
 
 def test_connect_reports_unopenable_port():
-    def factory(name, baud, timeout):
+    def factory(name, baud, **kwargs):
         raise serial.SerialException("access denied")
 
     with pytest.raises(GrblError, match="COM9.*열 수 없습니다"):
         connect("COM9", 115200, serial_factory=factory)
+
+
+def test_connect_gives_up_on_port_whose_writes_never_complete():
+    # 상대 장치가 없는 블루투스 가상 포트(COM6 등)는 쓰기가 끝나지 않는다.
+    # 쓰기 제한 시간이 없으면 리셋 바이트를 쓰는 순간 프로그램이 영원히 멈춘다
+    class DeadBluetoothPort(FakeGrbl):
+        def __init__(self, write_timeout):
+            super().__init__(banner=False)
+            self.write_timeout = write_timeout
+
+        def write(self, data):
+            if self.write_timeout is None:
+                raise AssertionError("쓰기 제한 시간이 없어 실제 포트라면 영원히 멈춘다")
+            raise serial.SerialTimeoutException("Write timeout")
+
+    opened = []
+
+    def factory(name, baud, timeout=None, write_timeout=None):
+        opened.append(DeadBluetoothPort(write_timeout))
+        return opened[0]
+
+    with pytest.raises(GrblError, match="COM6.*GRBL 응답이 없습니다"):
+        connect("COM6", 115200, timeout_s=0.1, serial_factory=factory)
+    assert opened[0].closed
