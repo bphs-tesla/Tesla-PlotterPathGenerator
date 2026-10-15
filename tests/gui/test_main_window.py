@@ -9,6 +9,7 @@ from plotter import camera, grbl_sender
 from plotter.config import Config
 from plotter.gui.main_window import MainWindow
 from plotter.gui.state import AppState
+from plotter.maze import CELL_PX
 
 
 def finish_connect(window, qapp):
@@ -123,3 +124,37 @@ def test_connect_runs_in_background_without_freezing_gui(window, monkeypatch, qa
     assert window._serial is port
     assert window._connect_button.text() == "연결 해제"
     assert window._connect_button.isEnabled()
+
+
+def test_maze_defaults_match_work_area_ratio(window):
+    assert (window._maze_cols.value(), window._maze_rows.value()) == (20, 15)
+    assert window._maze_cols.minimum() == 3 and window._maze_rows.minimum() == 3
+
+
+def test_maze_button_makes_reviewable_drawing_without_camera(window, tmp_path):
+    assert window._maze_button.isEnabled()  # 카메라가 없어도 미로는 만들 수 있다
+    window._maze_cols.setValue(6)
+    window._maze_rows.setValue(4)
+    window._make_maze()
+    assert window._state is AppState.REVIEW
+    assert window._image_size == (6 * CELL_PX, 4 * CELL_PX)
+    assert window._lines
+    svgs = list((tmp_path / "output").glob("*.svg"))
+    gcodes = list((tmp_path / "output").glob("*.gcode"))
+    assert len(svgs) == 1 and len(gcodes) == 1
+    assert "G1 " in gcodes[0].read_text(encoding="utf-8")
+    assert "미로 6×4" in window._status.text()
+    assert window._retake_button.isEnabled()
+    assert window._maze_button.isEnabled()  # 결과 확인 중에도 새 미로를 만들 수 있다
+
+
+def test_maze_controls_locked_while_drawing(window):
+    window._state = AppState.SENDING
+    try:
+        window._apply_state()
+        assert not window._maze_button.isEnabled()
+        assert not window._maze_cols.isEnabled()
+        assert not window._maze_rows.isEnabled()
+    finally:
+        # 그리는 중 상태로 창을 닫으면 확인 대화상자가 떠서 테스트가 멈춘다
+        window._state = AppState.LIVE

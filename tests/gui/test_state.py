@@ -10,7 +10,7 @@ def controls(state, camera_ready=True, port_connected=True, has_lines=True):
 def test_live_allows_capture_and_device_selection():
     assert controls(AppState.LIVE) == Controls(
         select_camera=True, select_port=True, capture=True, retake=False,
-        send=False, pause=False, resume=False, stop=False,
+        send=False, pause=False, resume=False, stop=False, maze=True,
     )
 
 
@@ -43,3 +43,13 @@ def test_drawing_locks_port_and_allows_stop(state):
 def test_pause_and_resume_are_exclusive():
     assert (controls(AppState.SENDING).pause, controls(AppState.SENDING).resume) == (True, False)
     assert (controls(AppState.PAUSED).pause, controls(AppState.PAUSED).resume) == (False, True)
+
+
+def test_maze_can_be_made_without_camera_while_live_or_reviewing():
+    assert controls(AppState.LIVE, camera_ready=False).maze is True
+    assert controls(AppState.REVIEW).maze is True
+
+
+@pytest.mark.parametrize("state", [AppState.PROCESSING, AppState.SENDING, AppState.PAUSED])
+def test_maze_is_locked_while_busy(state):
+    assert controls(state).maze is False

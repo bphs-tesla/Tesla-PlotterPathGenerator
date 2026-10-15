@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -27,11 +28,13 @@ from plotter.gui.preview import gray_to_qimage, render_lines
 from plotter.gui.state import AppState, Controls, controls_for
 from plotter.gui.workers import ConnectThread, ProcessThread, SendThread
 from plotter.lines import Polyline
+from plotter.maze import CELL_PX, MIN_CELLS, generate_maze, maze_to_lines
 
 PREVIEW_SIZE = (480, 360)
 FRAME_INTERVAL_MS = 33
 READY_MESSAGE = "스페이스바나 촬영 버튼으로 촬영하세요"
 RESULT_PLACEHOLDER = "촬영하면 해칭 결과가 여기에 표시됩니다"
+MAX_MAZE_CELLS = 60
 
 
 class MainWindow(QMainWindow):
@@ -82,6 +85,11 @@ class MainWindow(QMainWindow):
         self._pause_button = self._button("일시정지", self._toggle_pause)
         self._stop_button = self._button("정지", self._stop)
 
+        # 미로 크기 기본값 20×15칸은 작업 영역 200×150mm와 같은 비율이다
+        self._maze_cols = self._cell_count(20)
+        self._maze_rows = self._cell_count(15)
+        self._maze_button = self._button("미로 생성", self._make_maze)
+
         self._progress = QProgressBar()
         self._progress.setFormat("%v / %m 줄")
         self._progress.setValue(0)
@@ -108,11 +116,22 @@ class MainWindow(QMainWindow):
                        self._pause_button, self._stop_button):
             buttons.addWidget(button)
 
+        maze_row = QHBoxLayout()
+        maze_row.addWidget(QLabel("미로:"))
+        maze_row.addWidget(QLabel("가로"))
+        maze_row.addWidget(self._maze_cols)
+        maze_row.addWidget(QLabel("세로"))
+        maze_row.addWidget(self._maze_rows)
+        maze_row.addWidget(QLabel("칸"))
+        maze_row.addWidget(self._maze_button)
+        maze_row.addStretch(1)
+
         layout = QVBoxLayout()
         layout.addLayout(camera_row)
         layout.addLayout(port_row)
         layout.addLayout(views)
         layout.addLayout(buttons)
+        layout.addLayout(maze_row)
         layout.addWidget(self._progress)
         layout.addWidget(self._status)
 
@@ -128,6 +147,14 @@ class MainWindow(QMainWindow):
         button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         button.clicked.connect(slot)
         return button
+
+    def _cell_count(self, value: int) -> QSpinBox:
+        box = QSpinBox()
+        box.setRange(MIN_CELLS, MAX_MAZE_CELLS)
+        box.setValue(value)
+        # 클릭했을 때만 포커스를 받아, 평소에는 스페이스바가 촬영 단축키로 동작하게 한다
+        box.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        return box
 
     def _view(self, placeholder: str) -> QLabel:
         label = QLabel(placeholder)
@@ -168,6 +195,9 @@ class MainWindow(QMainWindow):
         self._pause_button.setEnabled(c.pause or c.resume)
         self._pause_button.setText("재개" if c.resume else "일시정지")
         self._stop_button.setEnabled(c.stop)
+        self._maze_button.setEnabled(c.maze)
+        self._maze_cols.setEnabled(c.maze)
+        self._maze_rows.setEnabled(c.maze)
 
     # ---------- 카메라 ----------
 
@@ -239,7 +269,17 @@ class MainWindow(QMainWindow):
         self._worker.failed.connect(self._on_process_failed)
         self._worker.start()
 
-    def _on_processed(self, lines: list[Polyline]) -> None:
+    def _make_maze(self) -> None:
+        """미로를 만들어 촬영 결과와 똑같이 미리보기, 저장, 전송할 수 있게 한다."""
+        if not self._controls().maze:
+            return
+        cols, rows = self._maze_cols.value(), self._maze_rows.value()
+        self._timer.stop()  # 결과 확인 중에는 카메라 미리보기를 멈춘다
+        lines = maze_to_lines(generate_maze(cols, rows))
+        self._image_size = (cols * CELL_PX, rows * CELL_PX)
+        self._on_processed(lines, label=f"미로 {cols}×{rows}칸, ")
+
+    def _on_processed(self, lines: list[Polyline], label: str = "") -> None:
         width, height = self._image_size
         self._lines = lines
         self._commands = gcode.generate(lines, width, height, self._cfg)
@@ -258,7 +298,7 @@ class MainWindow(QMainWindow):
         else:
             if lines:
                 self._set_status(
-                    f"선 {len(lines)}개 생성, {self._output_dir.name}/{svg_path.name}, "
+                    f"{label}선 {len(lines)}개 생성, {self._output_dir.name}/{svg_path.name}, "
                     f"{gcode_path.name} 저장됨. 전송을 누르면 그리기 시작")
             else:
                 self._set_status("그릴 선이 없습니다. 다시 촬영하세요")

@@ -24,6 +24,7 @@ class Controls:
     pause: bool
     resume: bool
     stop: bool
+    maze: bool  # 미로 생성 (카메라가 없어도 된다)
 
 
 def controls_for(state: AppState, *, camera_ready: bool, port_connected: bool, has_lines: bool) -> Controls:
@@ -37,4 +38,5 @@ def controls_for(state: AppState, *, camera_ready: bool, port_connected: bool, h
         pause=state is AppState.SENDING,
         resume=state is AppState.PAUSED,
         stop=drawing,
+        maze=state in (AppState.LIVE, AppState.REVIEW),
     )
