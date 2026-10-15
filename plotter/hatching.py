@@ -42,19 +42,27 @@ def _diagonal_lines(delta: float, offset: float, w: int, h: int, angle: float) -
 
 
 def _bright_mask(contours: list[np.ndarray]) -> Polygon | None:
-    """등고선으로 '레벨보다 밝은 영역' 다각형을 만든다. 등고선이 없으면 None."""
-    mask = None
+    """등고선으로 '레벨보다 밝은 영역' 다각형을 만든다. 등고선이 없으면 None.
+
+    원본은 도형을 하나씩 합치고 빼서 등고선 수의 제곱에 비례해 느려졌다.
+    노이즈가 있는 웹캠 프레임은 등고선이 수천 개라, 더할 것과 뺄 것을 모아 한 번에 합친다.
+    """
+    added: list[Polygon] = []
+    removed: list[Polygon] = []
     for points in contours:
         if len(points) < 4:
             continue
         ring = LinearRing(points[:, [1, 0]])
-        if mask is None:
-            mask = Polygon(ring)
+        if not added:
+            added.append(Polygon(ring))
         elif ring.is_ccw:
-            mask = mask.union(Polygon(ring).buffer(0.5))
+            added.append(Polygon(ring).buffer(0.5))
         else:
-            mask = mask.difference(Polygon(ring).buffer(-0.5))
-    return mask
+            removed.append(Polygon(ring).buffer(-0.5))
+    if not added:
+        return None
+    mask = shapely.union_all(added)
+    return mask.difference(shapely.union_all(removed)) if removed else mask
 
 
 def hatch_image(img: np.ndarray, pitch: float, levels: tuple[int, ...], angle: float) -> list[Polyline]:

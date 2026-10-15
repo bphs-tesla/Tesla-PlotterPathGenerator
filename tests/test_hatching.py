@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 
 from plotter.hatching import hatch_image
@@ -59,3 +61,15 @@ def test_returns_plain_float_tuples():
     lines = hatch_image(np.zeros((40, 40), np.uint8), 2.0, LEVELS, 45.0)
     x, y = lines[0][0]
     assert type(x) is float and type(y) is float
+
+
+def test_noisy_webcam_frame_is_hatched_quickly():
+    # 센서 노이즈가 있으면 작은 등고선이 수천 개 생긴다. 하나씩 합치면 수십 초가 걸렸다
+    rng = np.random.default_rng(0)
+    yy, xx = np.mgrid[0:480, 0:640]
+    base = 128 + 100 * np.sin(xx / 60) * np.cos(yy / 45)
+    img = (base + rng.normal(0, 3, base.shape)).clip(0, 255).astype(np.uint8)
+    started = time.perf_counter()
+    lines = hatch_image(img, 1.0, LEVELS, 45.0)
+    assert time.perf_counter() - started < 5
+    assert lines
