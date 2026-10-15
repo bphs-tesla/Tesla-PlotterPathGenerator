@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -244,17 +245,28 @@ class MainWindow(QMainWindow):
         self._commands = gcode.generate(lines, width, height, self._cfg)
         self._show_image(self._result_view, render_lines(lines, width, height))
         self._state = AppState.REVIEW
+        # 촬영할 때마다 시각을 붙인 새 파일로 저장해 이전 결과를 덮어쓰지 않는다
+        stem = f"output-{self._timestamp()}"
+        svg_path = self._output_dir / f"{stem}.svg"
+        gcode_path = self._output_dir / f"{stem}.gcode"
         try:
-            svg_export.save_svg(lines, width, height, self._output_dir / "output.svg")
-            gcode.save_gcode(self._commands, self._output_dir / "output.gcode")
+            self._output_dir.mkdir(parents=True, exist_ok=True)
+            svg_export.save_svg(lines, width, height, svg_path)
+            gcode.save_gcode(self._commands, gcode_path)
         except OSError as exc:
             self._set_status(f"파일 저장 실패: {exc}")
         else:
             if lines:
-                self._set_status(f"선 {len(lines)}개 생성, output.svg와 output.gcode 저장됨. 전송을 누르면 그리기 시작")
+                self._set_status(
+                    f"선 {len(lines)}개 생성, {self._output_dir.name}/{svg_path.name}, "
+                    f"{gcode_path.name} 저장됨. 전송을 누르면 그리기 시작")
             else:
                 self._set_status("그릴 선이 없습니다. 다시 촬영하세요")
         self._apply_state()
+
+    @staticmethod
+    def _timestamp() -> str:
+        return datetime.now().strftime("%Y%m%d-%H%M%S")
 
     def _on_process_failed(self, message: str) -> None:
         self._retake()

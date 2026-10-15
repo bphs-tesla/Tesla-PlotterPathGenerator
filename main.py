@@ -18,7 +18,7 @@ def main() -> int:
     except ConfigError as exc:
         QMessageBox.critical(None, "설정 오류", f"config.toml을 읽을 수 없습니다.\n\n{exc}")
         return 1
-    window = MainWindow(cfg, ROOT)
+    window = MainWindow(cfg, ROOT / "output")
     window.show()
     return app.exec()
 

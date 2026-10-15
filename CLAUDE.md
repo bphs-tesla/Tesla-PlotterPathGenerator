@@ -22,7 +22,7 @@ GUI tests run headless via `QT_QPA_PLATFORM=offscreen` (set in `tests/gui/confte
 
 ## Architecture
 
-PyQt6 app that captures a webcam frame, hatches it, writes `output.svg` / `output.gcode` to the repo root, and streams the G-code to GRBL.
+PyQt6 app that captures a webcam frame, hatches it, writes `output/output-YYYYMMDD-HHMMSS.svg` and `.gcode` (one pair per capture, folder created on demand, git-ignored), and streams the G-code to GRBL.
 
 Data passed between stages is always `list[Polyline]` (`plotter/lines.py`), in image pixel coordinates until `gcode.to_mm` converts to plotter millimetres (aspect-preserving fit, y flipped, origin bottom-left).
 

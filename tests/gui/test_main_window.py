@@ -1,3 +1,4 @@
+import re
 import threading
 import time
 
@@ -23,7 +24,7 @@ def window(qapp, tmp_path, monkeypatch):
     monkeypatch.setattr(camera, "list_cameras", lambda *a, **k: [])
     monkeypatch.setattr(grbl_sender, "available_ports", lambda: ["COM7"])
     settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
-    w = MainWindow(Config(), tmp_path, settings)
+    w = MainWindow(Config(), tmp_path / "output", settings)  # 아직 없는 폴더
     yield w
     w.close()
 
@@ -39,11 +40,30 @@ def test_processed_result_is_saved_and_reviewed(window, tmp_path):
     window._image_size = (640, 480)
     window._on_processed([[(10.0, 10.0), (100.0, 100.0)]])
     assert window._state is AppState.REVIEW
-    assert (tmp_path / "output.svg").exists()
-    gcode = (tmp_path / "output.gcode").read_text(encoding="utf-8")
-    assert gcode.startswith("G21\nG90\n")
+    # output 폴더를 만들고, 촬영 시각이 들어간 같은 이름으로 svg와 gcode를 저장한다
+    svgs = list((tmp_path / "output").glob("*.svg"))
+    gcodes = list((tmp_path / "output").glob("*.gcode"))
+    assert len(svgs) == 1 and len(gcodes) == 1
+    assert re.fullmatch(r"output-\d{8}-\d{6}", svgs[0].stem)
+    assert gcodes[0].stem == svgs[0].stem
+    assert gcodes[0].read_text(encoding="utf-8").startswith("G21\nG90\n")
+    assert svgs[0].name in window._status.text()
     assert window._retake_button.isEnabled()
     assert not window._send_button.isEnabled()  # 포트가 연결되지 않음
+
+
+def test_each_capture_keeps_its_own_files(window, tmp_path, monkeypatch):
+    times = iter(["20261016-090000", "20261016-090105"])
+    monkeypatch.setattr(window, "_timestamp", lambda: next(times))
+    window._image_size = (640, 480)
+    window._on_processed([[(10.0, 10.0), (100.0, 100.0)]])
+    window._retake()
+    window._on_processed([[(20.0, 20.0), (200.0, 200.0)]])
+    names = sorted(p.name for p in (tmp_path / "output").iterdir())
+    assert names == [
+        "output-20261016-090000.gcode", "output-20261016-090000.svg",
+        "output-20261016-090105.gcode", "output-20261016-090105.svg",
+    ]
 
 
 def test_empty_result_disables_send(window):
