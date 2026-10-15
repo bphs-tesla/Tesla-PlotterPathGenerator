@@ -12,3 +12,6 @@ wheels/
 # 실행 결과물
 output.svg
 output.gcode
+
+# potrace 실행 파일 (직접 내려받아 넣음, GPL)
+potrace/
