@@ -6,10 +6,66 @@ import numpy as np
 import pytest
 
 from plotter.config import Config
-from plotter.processing import ProcessingError, preprocess, process, smooth_edges, to_pbm
+from plotter.processing import ProcessingError, preprocess, process, render_svg, smooth_edges, to_pbm
 
 CFG = Config()
-TOOLS_INSTALLED = Path(CFG.potrace_path).exists() and Path(CFG.inkscape_path).exists()
+TOOLS_INSTALLED = Path(CFG.potrace_path).exists()
+
+# potrace -s 출력과 같은 모양: pt 단위 크기, 뒤집힌 좌표계 transform, 상대 곡선 경로
+POTRACE_STYLE_SVG = b"""<?xml version="1.0" standalone="no"?>
+<svg version="1.0" xmlns="http://www.w3.org/2000/svg" width="64.000000pt" height="48.000000pt"
+ viewBox="0 0 64.000000 48.000000" preserveAspectRatio="xMidYMid meet">
+<g transform="translate(0.000000,48.000000) scale(0.100000,-0.100000)" fill="#000000" stroke="none">
+<path d="M0 0 l320 0 l0 480 l-320 0 z"/>
+</g>
+</svg>
+"""
+
+FAKE_POTRACE = '''
+import sys
+header = sys.stdin.buffer.read().split(b"\\n")
+w, h = header[1].split()
+w, h = int(w), int(h)
+# 왼쪽 절반을 채운 SVG를 potrace처럼 출력한다
+sys.stdout.write(f"""<svg xmlns="http://www.w3.org/2000/svg" width="{w}pt" height="{h}pt" viewBox="0 0 {w} {h}">
+<g transform="translate(0,{h}) scale(0.1,-0.1)" fill="#000000" stroke="none">
+<path d="M0 0 l{w * 5} 0 l0 {h * 10} l-{w * 5} 0 z"/></g></svg>""")
+'''
+
+
+def fake_potrace(tmp_path: Path) -> str:
+    script = tmp_path / "fake_potrace.py"
+    script.write_text(FAKE_POTRACE, encoding="utf-8")
+    launcher = tmp_path / "fake_potrace.cmd"
+    launcher.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
+    return str(launcher)
+
+
+def test_render_svg_draws_potrace_output_without_inkscape():
+    img = render_svg(POTRACE_STYLE_SVG, 64, 48)
+    assert img.shape == (48, 64)
+    assert img.dtype == np.uint8
+    assert img[24, 10] < 64  # 왼쪽 절반은 검정
+    assert img[24, 50] > 192  # 오른쪽 절반은 흰 배경
+
+
+def test_render_svg_fits_requested_size():
+    # 미리보기와 같은 크기로 그려야 원본 사진과 섞을 수 있다
+    img = render_svg(POTRACE_STYLE_SVG, 128, 96)
+    assert img.shape == (96, 128)
+    assert img[48, 20] < 64 and img[48, 100] > 192
+
+
+def test_invalid_svg_is_reported():
+    with pytest.raises(ProcessingError, match="SVG"):
+        render_svg(b"not an svg", 10, 10)
+
+
+def test_smooth_edges_uses_only_potrace(tmp_path):
+    cfg = replace(CFG, potrace_path=fake_potrace(tmp_path))
+    edges = smooth_edges(np.full((30, 40), 255, np.uint8), cfg)
+    assert edges.shape == (30, 40)
+    assert edges[15, 5] < 64 and edges[15, 35] > 192
 
 
 def test_preprocess_returns_binary_of_same_size():
@@ -56,7 +112,7 @@ def test_process_rejects_color_image():
         process(np.zeros((10, 10, 3), np.uint8), CFG)
 
 
-@pytest.mark.skipif(not TOOLS_INSTALLED, reason="potrace/Inkscape가 설치되어 있지 않음")
+@pytest.mark.skipif(not TOOLS_INSTALLED, reason="potrace가 설치되어 있지 않음")
 def test_process_end_to_end_on_non_640_image():
     gray = np.full((240, 320), 255, np.uint8)
     gray[60:180, 80:240] = 30  # 어두운 사각형

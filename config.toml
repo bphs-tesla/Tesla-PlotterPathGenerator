@@ -14,8 +14,7 @@ pen_delay_s = 0.2
 feed_rate = 3000.0
 baud = 115200
 
-potrace_path = 'C:/potrace.exe'
-inkscape_path = 'C:\Program Files\Inkscape\bin\inkscape.exe'
+potrace_path = './potrace/potrace.exe'
 
 # 해칭: 선 간격(픽셀), 밝기 단계(0~255 오름차순), 각도(도)
 hatch_pitch = 1.0

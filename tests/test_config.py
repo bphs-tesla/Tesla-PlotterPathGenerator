@@ -23,7 +23,6 @@ def test_defaults_match_spec():
     assert (cfg.pen_down, cfg.pen_up, cfg.pen_delay_s) == ("M3 S90", "M5", 0.2)
     assert (cfg.feed_rate, cfg.baud) == (3000.0, 115200)
     assert cfg.potrace_path == "C:/potrace.exe"
-    assert cfg.inkscape_path == r"C:\Program Files\Inkscape\bin\inkscape.exe"
     assert (cfg.hatch_pitch, cfg.hatch_levels, cfg.hatch_angle) == (1.0, (20, 100, 180), 45.0)
 
 
@@ -75,3 +74,9 @@ def test_levels_must_be_ascending_in_range(tmp_path):
 def test_syntax_error_is_reported(tmp_path):
     with pytest.raises(ConfigError, match="문법"):
         load_config(write(tmp_path, "work_width_mm = = 1\n"))
+
+
+def test_inkscape_path_is_no_longer_a_setting(tmp_path):
+    # SVG는 PyQt6로 그리므로 Inkscape 경로를 받지 않는다
+    with pytest.raises(ConfigError, match="inkscape_path"):
+        load_config(write(tmp_path, "inkscape_path = 'C:/inkscape.exe'\n"))

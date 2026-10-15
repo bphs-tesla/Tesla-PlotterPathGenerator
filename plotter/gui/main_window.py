@@ -231,7 +231,7 @@ class MainWindow(QMainWindow):
         gray = self._last_gray.copy()
         self._image_size = (gray.shape[1], gray.shape[0])
         self._state = AppState.PROCESSING
-        self._set_status("이미지 처리 중... (potrace, Inkscape, 해칭)")
+        self._set_status("이미지 처리 중... (potrace, 해칭)")
         self._apply_state()
         self._worker = ProcessThread(gray, self._cfg, self)
         self._worker.succeeded.connect(self._on_processed)

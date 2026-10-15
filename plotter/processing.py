@@ -1,4 +1,4 @@
-"""흑백 프레임 → 이진화 → potrace/Inkscape로 외곽 다듬기 → 해칭."""
+"""흑백 프레임 → 이진화 → potrace로 외곽 다듬기 → 해칭."""
 
 from __future__ import annotations
 
@@ -6,6 +6,9 @@ import subprocess
 
 import cv2
 import numpy as np
+from PyQt6.QtCore import QByteArray
+from PyQt6.QtGui import QColor, QImage, QPainter
+from PyQt6.QtSvg import QSvgRenderer
 
 from plotter.config import Config
 from plotter.hatching import hatch_image
@@ -54,16 +57,26 @@ def smooth_edges(binary: np.ndarray, cfg: Config) -> np.ndarray:
          "--opttolerance", "0.2", "--unit", "10"],
         to_pbm(binary),
     )
-    png = _run(
-        "Inkscape",
-        [cfg.inkscape_path, "--pipe", "--export-type=png", "--export-background=white", "--export-filename=-"],
-        svg,
-    )
-    img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        raise ProcessingError("Inkscape 출력 이미지를 읽을 수 없습니다")
     h, w = binary.shape
-    return cv2.resize(img, (w, h))
+    return render_svg(svg, w, h)
+
+
+def render_svg(svg: bytes, width: int, height: int) -> np.ndarray:
+    """SVG를 흰 배경의 흑백 이미지로 그린다. 예전에는 Inkscape로 PNG를 만들었다."""
+    renderer = QSvgRenderer(QByteArray(svg))
+    if not renderer.isValid():
+        raise ProcessingError("potrace 출력 SVG를 읽을 수 없습니다")
+    image = QImage(width, height, QImage.Format.Format_Grayscale8)
+    image.fill(QColor("white"))
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    renderer.render(painter)  # viewBox 전체를 이미지 크기에 맞춰 그린다
+    painter.end()
+    # QImage의 한 줄은 4바이트 단위로 채워질 수 있으므로 실제 너비만 잘라낸다
+    bits = image.constBits()
+    bits.setsize(image.sizeInBytes())
+    rows = np.frombuffer(bits, np.uint8).reshape(height, image.bytesPerLine())
+    return rows[:, :width].copy()
 
 
 def process(gray: np.ndarray, cfg: Config) -> list[Polyline]:

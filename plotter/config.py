@@ -21,7 +21,6 @@ class Config:
     feed_rate: float = 3000.0
     baud: int = 115200
     potrace_path: str = "C:/potrace.exe"
-    inkscape_path: str = r"C:\Program Files\Inkscape\bin\inkscape.exe"
     hatch_pitch: float = 1.0
     hatch_levels: tuple[int, ...] = (20, 100, 180)
     hatch_angle: float = 45.0
