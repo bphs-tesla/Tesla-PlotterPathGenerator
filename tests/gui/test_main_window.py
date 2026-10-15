@@ -1,3 +1,6 @@
+import threading
+import time
+
 import pytest
 from PyQt6.QtCore import QSettings
 
@@ -5,6 +8,14 @@ from plotter import camera, grbl_sender
 from plotter.config import Config
 from plotter.gui.main_window import MainWindow
 from plotter.gui.state import AppState
+
+
+def finish_connect(window, qapp):
+    """백그라운드 연결이 끝날 때까지 기다리고 결과 시그널을 처리한다."""
+    worker = getattr(window, "_connect_worker", None)
+    if worker is not None:
+        assert worker.wait(5000)
+    qapp.processEvents()
 
 
 @pytest.fixture
@@ -52,12 +63,43 @@ def test_processing_failure_returns_to_live(window):
     assert "potrace" in window._status.text()
 
 
-def test_connect_failure_is_shown(window, monkeypatch):
+def test_connect_failure_is_shown(window, monkeypatch, qapp):
     def fail(name, baud):
         raise grbl_sender.GrblError(f"{name}에서 GRBL 응답이 없습니다. 포트와 펌웨어를 확인하세요")
 
     monkeypatch.setattr(grbl_sender, "connect", fail)
     window._toggle_connection()
+    finish_connect(window, qapp)
     assert window._serial is None
     assert "GRBL 응답이 없습니다" in window._status.text()
     assert window._connect_button.text() == "연결"
+    assert window._connect_button.isEnabled()
+
+
+def test_connect_runs_in_background_without_freezing_gui(window, monkeypatch, qapp):
+    # 블루투스 포트는 여는 데만 13초가 걸린다. 그동안 창이 멈추면 안 된다
+    release = threading.Event()
+
+    class Port:
+        def close(self):
+            pass
+
+    port = Port()
+
+    def slow_connect(name, baud):
+        release.wait(2)
+        return port
+
+    monkeypatch.setattr(grbl_sender, "connect", slow_connect)
+    started = time.monotonic()
+    window._toggle_connection()
+    assert time.monotonic() - started < 0.5
+    assert "연결 중" in window._status.text()
+    assert not window._connect_button.isEnabled()
+    assert not window._port_combo.isEnabled()
+
+    release.set()
+    finish_connect(window, qapp)
+    assert window._serial is port
+    assert window._connect_button.text() == "연결 해제"
+    assert window._connect_button.isEnabled()

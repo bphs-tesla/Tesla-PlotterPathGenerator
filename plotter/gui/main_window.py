@@ -9,7 +9,6 @@ import numpy as np
 from PyQt6.QtCore import QSettings, Qt, QTimer
 from PyQt6.QtGui import QImage, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -25,7 +24,7 @@ from plotter import camera, gcode, grbl_sender, svg_export
 from plotter.config import Config
 from plotter.gui.preview import gray_to_qimage, render_lines
 from plotter.gui.state import AppState, Controls, controls_for
-from plotter.gui.workers import ProcessThread, SendThread
+from plotter.gui.workers import ConnectThread, ProcessThread, SendThread
 from plotter.lines import Polyline
 
 PREVIEW_SIZE = (480, 360)
@@ -51,6 +50,7 @@ class MainWindow(QMainWindow):
         self._serial = None
         self._sender: grbl_sender.GrblSender | None = None
         self._worker = None
+        self._connect_worker: ConnectThread | None = None
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_camera_frame)
@@ -155,9 +155,10 @@ class MainWindow(QMainWindow):
         connected = self._serial is not None
         self._camera_combo.setEnabled(c.select_camera)
         self._camera_refresh.setEnabled(c.select_camera)
-        self._port_combo.setEnabled(c.select_port and not connected)
-        self._port_refresh.setEnabled(c.select_port and not connected)
-        self._connect_button.setEnabled(c.select_port)
+        connecting = self._connecting()
+        self._port_combo.setEnabled(c.select_port and not connected and not connecting)
+        self._port_refresh.setEnabled(c.select_port and not connected and not connecting)
+        self._connect_button.setEnabled(c.select_port and not connecting)
         self._connect_button.setText("연결 해제" if connected else "연결")
         self._connection_label.setText("● 연결됨" if connected else "● 연결 안 됨")
         self._capture_button.setEnabled(c.capture)
@@ -291,19 +292,29 @@ class MainWindow(QMainWindow):
         if not name:
             self._set_status("시리얼 포트를 선택하세요")
             return
-        self._set_status(f"{name}에 연결 중...")
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            self._serial = grbl_sender.connect(name, self._cfg.baud)
-        except grbl_sender.GrblError as exc:
-            self._set_status(str(exc))
-            self._apply_state()
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
+        self._set_status(f"{name}에 연결 중... (GRBL 응답을 최대 몇 초 기다립니다)")
+        self._connect_worker = ConnectThread(name, self._cfg.baud, self)
+        self._connect_worker.connected.connect(lambda port: self._on_connected(name, port))
+        self._connect_worker.failed.connect(self._on_connect_failed)
+        self._connect_worker.finished.connect(self._on_connect_finished)
+        self._apply_state()
+        self._connect_worker.start()
+
+    def _connecting(self) -> bool:
+        return self._connect_worker is not None and not self._connect_worker.isFinished()
+
+    def _on_connected(self, name: str, port) -> None:
+        self._serial = port
         self._sender = grbl_sender.GrblSender(self._serial, self._cfg.pen_up)
         self._settings.setValue("port", name)
         self._set_status(f"{name}에 연결됨")
+        self._apply_state()
+
+    def _on_connect_failed(self, message: str) -> None:
+        self._set_status(message)
+        self._apply_state()
+
+    def _on_connect_finished(self) -> None:
         self._apply_state()
 
     def _disconnect(self) -> None:
@@ -377,6 +388,12 @@ class MainWindow(QMainWindow):
             self._sender.request_stop()
         if self._worker is not None:
             self._worker.wait()
+        if self._connect_worker is not None:
+            self._connect_worker.wait()
+            # 연결이 끝났지만 시그널이 처리되기 전에 창을 닫으면 포트가 열린 채 남는다
+            if self._connect_worker.port is not None and self._connect_worker.port is not self._serial:
+                with contextlib.suppress(Exception):
+                    self._connect_worker.port.close()
         self._close_camera()
         self._disconnect()
         event.accept()
