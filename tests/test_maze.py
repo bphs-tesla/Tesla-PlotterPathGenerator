@@ -3,7 +3,15 @@ from collections import deque
 import numpy as np
 import pytest
 
-from plotter.maze import CELL_PX, generate_maze, maze_arrows, maze_drawing, maze_to_lines
+from plotter.maze import (
+    CELL_PX,
+    Difficulty,
+    generate_maze,
+    maze_arrows,
+    maze_drawing,
+    maze_to_lines,
+    solution_length,
+)
 
 
 def unit_edges(lines):
@@ -151,3 +159,57 @@ def test_drawing_has_margin_for_arrows_and_keeps_everything_inside():
     for line in lines:
         for x, y in line:
             assert 0 <= x <= width and 0 <= y <= height
+
+
+def openings_connected(grid):
+    rows, cols = grid.shape
+    openings = [
+        (r, c) for r in range(rows) for c in range(cols)
+        if grid[r, c] == 0 and (r in (0, rows - 1) or c in (0, cols - 1))
+    ]
+    if len(openings) != 2:
+        return False
+    start, goal = openings
+    seen, queue = {start}, deque([start])
+    while queue:
+        r, c = queue.popleft()
+        for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+            if 0 <= nr < rows and 0 <= nc < cols and grid[nr, nc] == 0 and (nr, nc) not in seen:
+                seen.add((nr, nc))
+                queue.append((nr, nc))
+    return goal in seen
+
+
+def test_solution_length_counts_cells_on_shortest_path():
+    grid = np.array([
+        [1, 1, 1, 1, 1],
+        [0, 0, 0, 0, 0],
+        [1, 1, 1, 1, 1],
+    ], np.int8)
+    assert solution_length(grid) == 5
+
+
+@pytest.mark.parametrize("difficulty", list(Difficulty))
+def test_every_difficulty_makes_a_valid_maze(difficulty):
+    grid = generate_maze(9, 6, seed=8, difficulty=difficulty)
+    assert grid.shape == (13, 19)
+    assert openings_connected(grid)
+
+
+def test_hard_maze_is_reproducible_with_seed():
+    a = generate_maze(10, 7, seed=21, difficulty=Difficulty.HARD)
+    b = generate_maze(10, 7, seed=21, difficulty=Difficulty.HARD)
+    assert np.array_equal(a, b)
+
+
+def test_harder_difficulty_means_longer_solution():
+    def average(difficulty):
+        return sum(solution_length(generate_maze(20, 15, seed=s, difficulty=difficulty)) for s in range(5)) / 5
+
+    easy, normal, hard = (average(d) for d in (Difficulty.EASY, Difficulty.NORMAL, Difficulty.HARD))
+    assert easy < normal < hard
+    assert hard > 2 * easy
+
+
+def test_difficulty_labels_are_korean():
+    assert [d.value for d in Difficulty] == ["쉬움", "보통", "어려움"]

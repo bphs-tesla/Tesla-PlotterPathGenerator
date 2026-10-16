@@ -7,9 +7,10 @@ from PyQt6.QtCore import QSettings
 
 from plotter import camera, grbl_sender
 from plotter.config import Config
+from plotter.gui import main_window
 from plotter.gui.main_window import MainWindow
 from plotter.gui.state import AppState
-from plotter.maze import CELL_PX
+from plotter.maze import CELL_PX, Difficulty
 
 
 def finish_connect(window, qapp):
@@ -155,6 +156,28 @@ def test_maze_controls_locked_while_drawing(window):
         assert not window._maze_button.isEnabled()
         assert not window._maze_cols.isEnabled()
         assert not window._maze_rows.isEnabled()
+        assert not window._maze_difficulty.isEnabled()
     finally:
         # 그리는 중 상태로 창을 닫으면 확인 대화상자가 떠서 테스트가 멈춘다
         window._state = AppState.LIVE
+
+
+def test_maze_difficulty_choices_default_to_normal(window):
+    combo = window._maze_difficulty
+    assert [combo.itemText(i) for i in range(combo.count())] == ["쉬움", "보통", "어려움"]
+    assert combo.currentText() == "보통"
+
+
+def test_selected_difficulty_is_used_for_maze(window, monkeypatch):
+    seen = []
+    real = main_window.generate_maze
+
+    def spy(cols, rows, seed=None, difficulty=Difficulty.EASY):
+        seen.append(difficulty)
+        return real(cols, rows, seed=seed, difficulty=difficulty)
+
+    monkeypatch.setattr(main_window, "generate_maze", spy)
+    window._maze_difficulty.setCurrentText("어려움")
+    window._make_maze()
+    assert seen == [Difficulty.HARD]
+    assert "어려움" in window._status.text()

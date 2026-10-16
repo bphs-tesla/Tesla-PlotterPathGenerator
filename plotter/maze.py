@@ -7,8 +7,13 @@ PNG를 거치지 않고 벽을 바로 직선으로 바꾸므로 펜이 벽 선�
 
 from __future__ import annotations
 
+from collections import deque
+from enum import Enum
+
 import numpy as np
 from mazelib import Maze
+from mazelib.generate.BacktrackingGenerator import BacktrackingGenerator
+from mazelib.generate.HuntAndKill import HuntAndKill
 from mazelib.generate.Prims import Prims
 
 from plotter.lines import Polyline
@@ -23,12 +28,23 @@ _ARROW_FAR = 0.9
 _ARROW_HEAD = 0.3
 
 
-def generate_maze(cols: int, rows: int, seed: int | None = None) -> np.ndarray:
-    """가로 cols칸, 세로 rows칸 미로. 바깥 벽에 입구와 출구를 뚫어 돌려준다."""
-    if cols < MIN_CELLS or rows < MIN_CELLS:
-        raise ValueError(f"미로는 가로, 세로 모두 {MIN_CELLS}칸 이상이어야 합니다 (받은 값: {cols}×{rows})")
-    maze = Maze(seed)
-    maze.generator = Prims(rows, cols)
+class Difficulty(Enum):
+    """화면에 보이는 이름이 값이다.
+
+    20×15칸에서 잰 평균 정답 길이(전체 칸 대비): 쉬움 11%, 보통 23%, 어려움 약 55%.
+    """
+
+    EASY = "쉬움"  # Prims: 짧은 막다른 길이 많아 한눈에 걸러진다
+    NORMAL = "보통"  # HuntAndKill: 막다른 길이 길어 잘못 들어가면 오래 헤맨다
+    HARD = "어려움"  # Backtracking으로 여러 개 만들어 정답이 가장 긴 것을 고른다
+
+
+_HARD_CANDIDATES = 20
+
+
+def _one_maze(generator) -> np.ndarray:
+    maze = Maze()
+    maze.generator = generator
     maze.generate()
     maze.generate_entrances(start_outer=True, end_outer=True)
     grid = np.array(maze.grid, dtype=np.int8)
@@ -36,6 +52,41 @@ def generate_maze(cols: int, rows: int, seed: int | None = None) -> np.ndarray:
     grid[maze.start] = 0
     grid[maze.end] = 0
     return grid
+
+
+def generate_maze(
+    cols: int, rows: int, seed: int | None = None, difficulty: Difficulty = Difficulty.EASY
+) -> np.ndarray:
+    """가로 cols칸, 세로 rows칸 미로. 바깥 벽에 입구와 출구를 뚫어 돌려준다."""
+    if cols < MIN_CELLS or rows < MIN_CELLS:
+        raise ValueError(f"미로는 가로, 세로 모두 {MIN_CELLS}칸 이상이어야 합니다 (받은 값: {cols}×{rows})")
+    Maze.set_seed(seed)  # 후보를 여러 개 만들어도 seed가 같으면 결과가 같다
+    if difficulty is Difficulty.EASY:
+        return _one_maze(Prims(rows, cols))
+    if difficulty is Difficulty.NORMAL:
+        return _one_maze(HuntAndKill(rows, cols))
+    candidates = [_one_maze(BacktrackingGenerator(rows, cols)) for _ in range(_HARD_CANDIDATES)]
+    return max(candidates, key=solution_length)
+
+
+def solution_length(grid: np.ndarray) -> int:
+    """입구에서 출구까지 가장 짧은 길이 지나는 격자 칸 수 (입구와 출구 포함)."""
+    openings = _openings(grid)
+    if len(openings) < 2:
+        return 0
+    start, goal = openings[0], openings[1]
+    rows, cols = grid.shape
+    distance = {start: 1}
+    queue = deque([start])
+    while queue:
+        r, c = queue.popleft()
+        if (r, c) == goal:
+            return distance[goal]
+        for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+            if 0 <= nr < rows and 0 <= nc < cols and grid[nr, nc] == 0 and (nr, nc) not in distance:
+                distance[(nr, nc)] = distance[(r, c)] + 1
+                queue.append((nr, nc))
+    return 0
 
 
 def maze_to_lines(grid: np.ndarray) -> list[Polyline]:

@@ -28,7 +28,7 @@ from plotter.gui.preview import gray_to_qimage, render_lines
 from plotter.gui.state import AppState, Controls, controls_for
 from plotter.gui.workers import ConnectThread, ProcessThread, SendThread
 from plotter.lines import Polyline
-from plotter.maze import MIN_CELLS, generate_maze, maze_drawing
+from plotter.maze import MIN_CELLS, Difficulty, generate_maze, maze_drawing
 
 PREVIEW_SIZE = (480, 360)
 FRAME_INTERVAL_MS = 33
@@ -88,6 +88,10 @@ class MainWindow(QMainWindow):
         # 미로 크기 기본값 20×15칸은 작업 영역 200×150mm와 같은 비율이다
         self._maze_cols = self._cell_count(20)
         self._maze_rows = self._cell_count(15)
+        self._maze_difficulty = QComboBox()
+        self._maze_difficulty.addItems([d.value for d in Difficulty])
+        self._maze_difficulty.setCurrentText(Difficulty.NORMAL.value)
+        self._maze_difficulty.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._maze_button = self._button("미로 생성", self._make_maze)
 
         self._progress = QProgressBar()
@@ -123,6 +127,8 @@ class MainWindow(QMainWindow):
         maze_row.addWidget(QLabel("세로"))
         maze_row.addWidget(self._maze_rows)
         maze_row.addWidget(QLabel("칸"))
+        maze_row.addWidget(QLabel("난이도"))
+        maze_row.addWidget(self._maze_difficulty)
         maze_row.addWidget(self._maze_button)
         maze_row.addStretch(1)
 
@@ -198,6 +204,7 @@ class MainWindow(QMainWindow):
         self._maze_button.setEnabled(c.maze)
         self._maze_cols.setEnabled(c.maze)
         self._maze_rows.setEnabled(c.maze)
+        self._maze_difficulty.setEnabled(c.maze)
 
     # ---------- 카메라 ----------
 
@@ -274,11 +281,12 @@ class MainWindow(QMainWindow):
         if not self._controls().maze:
             return
         cols, rows = self._maze_cols.value(), self._maze_rows.value()
+        difficulty = Difficulty(self._maze_difficulty.currentText())
         self._timer.stop()  # 결과 확인 중에는 카메라 미리보기를 멈춘다
         # 벽과 입구/출구 화살표. 화살표가 들어갈 여백만큼 그림이 커진다
-        lines, width, height = maze_drawing(generate_maze(cols, rows))
+        lines, width, height = maze_drawing(generate_maze(cols, rows, difficulty=difficulty))
         self._image_size = (width, height)
-        self._on_processed(lines, label=f"미로 {cols}×{rows}칸, ")
+        self._on_processed(lines, label=f"미로 {cols}×{rows}칸 ({difficulty.value}), ")
 
     def _on_processed(self, lines: list[Polyline], label: str = "") -> None:
         width, height = self._image_size
