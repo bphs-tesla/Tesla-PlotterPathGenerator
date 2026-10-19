@@ -20,8 +20,8 @@
 //   G20 / G21     : inch / mm
 //   G90 / G91     : 절대 / 상대 좌표
 //   G92 X Y       : 현재 위치를 지정한 좌표로 설정 (원점 맞추기)
-//   M3 S<각도>    : 펜 내림 (S가 없으면 PEN_DOWN_ANGLE)
-//   M5            : 펜 올림 (PEN_UP_ANGLE)
+//   M3            : 펜 내림 (360° 서보를 PEN_DOWN_MS 동안 돌림, S는 무시)
+//   M5            : 펜 올림 (반대로 PEN_UP_MS 동안 돌림)
 //   $             : 도움말
 //   $U            : 작업 영역 제한 해제 (끝점 측정용)
 //   $EL / $EB     : 현재 위치를 왼쪽 / 아래 끝으로 (그 자리가 X=0 / Y=0)
@@ -43,13 +43,19 @@ AF_Stepper motorB(500, 2);
 Servo penServo;
 const uint8_t PEN_SERVO_PIN = 10;
 
-// 실제 기구에 맞게 보정. config.toml의 pen_down = "M3 S90"이면 S90이 내림 각도로 쓰인다
-const int PEN_UP_ANGLE = 30;
-const int PEN_DOWN_ANGLE = 90;
-// 각도가 바뀐 뒤 서보가 다 움직일 때까지 기다리는 시간
-const unsigned long PEN_MOVE_MS = 150;
+// 360° (연속 회전) SG90: 각도가 아니라 회전 속도/방향을 정한다.
+// 1500us 근처가 정지, 그보다 작으면 한쪽, 크면 반대쪽으로 돈다.
+// 펜을 올리고 내릴 때 정해진 시간만큼 돌린 뒤 신호를 끊어 멈춘다.
+// 실제 기구에 맞게 보정:
+// - 방향이 반대면 PEN_DOWN_US와 PEN_UP_US를 서로 바꾼다
+// - 너무 많이/적게 돌면 PEN_DOWN_MS / PEN_UP_MS를 조절한다
+const int PEN_DOWN_US = 1300;
+const int PEN_UP_US = 1700;
+const unsigned long PEN_DOWN_MS = 250;
+const unsigned long PEN_UP_MS = 250;
 
-int penAngle = -1;
+// 전원을 켤 때 펜은 올라가 있다고 가정한다 (켜기 전에 펜을 올려 둔다)
+bool penDown = false;
 
 // 실제 기구에 맞게 보정
 const float STEPS_PER_MM = 80.0f;
@@ -430,12 +436,17 @@ bool moveTo(float xMM, float yMM, float feed) {
 // 펜 (서보)
 // --------------------------------------------------
 
-void setPen(int angle) {
-  if (angle == penAngle) return;
-  penServo.write(angle);
-  penAngle = angle;
-  // 서보가 다 움직이기 전에 이동을 시작하면 선이 끌린다
-  waitUs(PEN_MOVE_MS * 1000UL);
+void setPen(bool down) {
+  if (down == penDown) return;
+
+  penServo.attach(PEN_SERVO_PIN);
+  penServo.writeMicroseconds(down ? PEN_DOWN_US : PEN_UP_US);
+  // 멈춤(!)이 와도 서보가 계속 돌지 않도록 실시간 명령을 보지 않고 기다린다
+  delay(down ? PEN_DOWN_MS : PEN_UP_MS);
+  // 정지 값(1500us)은 서보마다 조금씩 달라 천천히 돌 수 있으므로 신호를 끊어 멈춘다
+  penServo.detach();
+
+  penDown = down;
 }
 
 // --------------------------------------------------
@@ -472,8 +483,8 @@ uint8_t executeLine(char* line) {
   int8_t pen = -1;      // 0 = 올림(M5), 1 = 내림(M3/M4)
   bool dwell = false;
   bool setPosition = false;
-  bool hasX = false, hasY = false, hasP = false, hasS = false;
-  float x = 0, y = 0, p = 0, s = 0;
+  bool hasX = false, hasY = false, hasP = false;
+  float x = 0, y = 0, p = 0;
 
   char* cursor = line;
 
@@ -529,8 +540,7 @@ uint8_t executeLine(char* line) {
         feedMMmin = inches ? value * 25.4f : value;
         break;
 
-      case 'S': s = value; hasS = true; break;
-
+      case 'S':   // 서보 각도: 360° 서보에서는 무시
       case 'Z':   // Z축은 없으므로 무시
         break;
 
@@ -542,8 +552,8 @@ uint8_t executeLine(char* line) {
   float unit = inches ? 25.4f : 1.0f;
 
   // 펜은 같은 줄의 이동보다 먼저 움직인다
-  if (pen == 1) setPen(hasS ? (int)constrain(s, 0, 180) : PEN_DOWN_ANGLE);
-  else if (pen == 0) setPen(PEN_UP_ANGLE);
+  if (pen == 1) setPen(true);
+  else if (pen == 0) setPen(false);
 
   if (dwell) {
     // G4 P0은 앞의 이동이 끝났다는 확인용. 이동은 동기식이라 바로 ok.
@@ -597,8 +607,7 @@ void softReset() {
   resetRequested = false;
   holding = false;
   // GRBL처럼 리셋하면 펜을 올린다
-  penServo.write(PEN_UP_ANGLE);
-  penAngle = PEN_UP_ANGLE;
+  setPen(false);
   absoluteMode = true;
   inches = false;
   feedMMmin = DEFAULT_FEED_MM_MIN;
@@ -618,10 +627,8 @@ void setup() {
   motorA.setSpeed(5);
   motorB.setSpeed(5);
 
-  // 켜자마자 펜을 올린다
-  penServo.attach(PEN_SERVO_PIN);
-  penServo.write(PEN_UP_ANGLE);
-  penAngle = PEN_UP_ANGLE;
+  // 서보는 붙이지 않는다. 신호가 없으면 360° 서보는 멈춰 있다.
+  // (켜기 전에 펜을 올려 둔다)
 
   loadLimits();
 
