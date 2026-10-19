@@ -29,7 +29,9 @@
 //   $LX / $LY     : $ER / $ET와 같음 (예전 이름)
 //   $L            : 작업 영역 보기
 //   $RL           : 작업 영역을 기본값으로 되돌림
-//   $J=G91 G0 X10 : 조그 이동 (작업 영역 제한 무시, GUI 원점 맞추기용)
+//   $J=G91 G0 X10 : 조그 이동 (작업 영역 제한 무시, 끝을 처음 정할 때)
+//   $ML/$MR/$MB/$MT : 왼쪽 / 오른쪽 / 아래 / 위 끝으로 이동
+// 위치와 펜 상태는 EEPROM에 저장되어 재부팅해도 원점이 유지된다
 // --------------------------------------------------
 
 // 실제 모터 연결:
@@ -189,6 +191,59 @@ void saveLimits() {
 }
 
 // --------------------------------------------------
+// 위치 저장 / 불러오기
+//
+// GUI가 포트를 열 때마다 아두이노가 재부팅되므로, 위치(= 원점 기준 좌표)와
+// 펜 상태를 EEPROM에 저장해 두고 켤 때 불러온다. 그래서 원점은 한 번만 정하면 된다.
+// EEPROM은 쓸 수 있는 횟수(약 10만 번)가 정해져 있어서, 명령이 끝나고
+// SAVE_IDLE_MS 동안 아무 명령도 없을 때만 저장한다 (그림 그리는 중에는 저장하지 않음).
+// 주의: 전원이 꺼진 동안 펜을 손으로 옮기면 저장된 위치가 틀어진다.
+// --------------------------------------------------
+
+const int POSITION_ADDR = 16;  // SavedLimits 뒤
+const uint16_t POSITION_MAGIC = 0xA5C3;
+const unsigned long SAVE_IDLE_MS = 1000;
+
+struct SavedPosition {
+  uint16_t magic;
+  long a;
+  long b;
+  bool penDown;
+};
+
+long savedA = 0;
+long savedB = 0;
+bool savedPenDown = false;
+unsigned long lastCommandMs = 0;
+
+void loadPosition() {
+  SavedPosition saved;
+  EEPROM.get(POSITION_ADDR, saved);
+
+  if (saved.magic == POSITION_MAGIC) {
+    posA = saved.a;
+    posB = saved.b;
+    penDown = saved.penDown;
+  }
+
+  savedA = posA;
+  savedB = posB;
+  savedPenDown = penDown;
+}
+
+void savePositionIfIdle() {
+  if (posA == savedA && posB == savedB && penDown == savedPenDown) return;
+  if (millis() - lastCommandMs < SAVE_IDLE_MS) return;
+
+  SavedPosition saved = { POSITION_MAGIC, posA, posB, penDown };
+  EEPROM.put(POSITION_ADDR, saved);
+
+  savedA = posA;
+  savedB = posB;
+  savedPenDown = penDown;
+}
+
+// --------------------------------------------------
 // 끝점 기록
 //
 // 오른쪽 / 위 끝은 현재 좌표계(원점 = 왼쪽 아래)의 스텝 값으로 기억한다.
@@ -280,6 +335,23 @@ uint8_t executeSetting(char* cmd) {
     limitsOn = true;
     updateAreaFromEdges();
     printLimits();
+    return 0;
+  }
+
+  // 끝으로 이동: $ML 왼쪽, $MR 오른쪽, $MB 아래, $MT 위 (다른 축은 그대로)
+  if (cmd[0] == 'M' && cmd[2] == '\0' &&
+      (cmd[1] == 'L' || cmd[1] == 'R' || cmd[1] == 'B' || cmd[1] == 'T')) {
+    float tx = mmX();
+    float ty = mmY();
+
+    if (cmd[1] == 'L') tx = 0;
+    else if (cmd[1] == 'R') tx = maxXMM;
+    else if (cmd[1] == 'B') ty = 0;
+    else ty = maxYMM;
+
+    moving = true;
+    moveTo(tx, ty, 1e9f);
+    moving = false;
     return 0;
   }
 
@@ -642,12 +714,23 @@ void setup() {
 
   loadLimits();
 
-  // 전원을 켤 때 펜(스타일러스)이 있는 곳이 원점 (0, 0) = 왼쪽 아래
+  // 저장된 위치가 있으면 이어서 쓴다. 처음 켰을 때(저장값 없음)는
+  // 펜이 있는 곳이 원점 (0, 0) = 왼쪽 아래
+  loadPosition();
+
+  // 저장된 작업 영역을 오른쪽 / 위 끝으로 삼아, 나중에 왼쪽 / 아래 끝을
+  // 다시 정해도 폭과 높이가 맞게 다시 계산되게 한다
+  rightKnown = true;
+  rightSteps = lroundf(maxXMM * STEPS_PER_MM);
+  topKnown = true;
+  topSteps = lroundf(maxYMM * STEPS_PER_MM);
+
   printBanner();
 }
 
 void loop() {
   pollRealtime();
+  savePositionIfIdle();
 
   if (resetRequested) {
     softReset();
@@ -674,6 +757,7 @@ void loop() {
 
       inputIndex = 0;
       lineOverflow = false;
+      lastCommandMs = millis();
 
       if (resetRequested) {
         // 이동 중 리셋: ok 대신 시작 메시지를 보낸다

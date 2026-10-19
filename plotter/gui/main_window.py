@@ -35,7 +35,6 @@ FRAME_INTERVAL_MS = 33
 READY_MESSAGE = "스페이스바나 촬영 버튼으로 촬영하세요"
 RESULT_PLACEHOLDER = "촬영하면 해칭 결과가 여기에 표시됩니다"
 MAX_MAZE_CELLS = 60
-JOG_STEPS_MM = (1.0, 10.0, 50.0)
 
 
 class MainWindow(QMainWindow):
@@ -95,20 +94,13 @@ class MainWindow(QMainWindow):
         self._maze_difficulty.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._maze_button = self._button("미로 생성", self._make_maze)
 
-        # 원점 맞추기: 펜을 조그로 옮긴 뒤 그 자리를 원점(왼쪽 아래)으로 정한다
-        self._jog_step = QComboBox()
-        for mm in JOG_STEPS_MM:
-            self._jog_step.addItem(f"{mm:g} mm", mm)
-        self._jog_step.setCurrentIndex(1)
-        self._jog_step.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
-        self._jog_buttons = [
-            self._button("← X-", lambda: self._jog(-1, 0)),
-            self._button("→ X+", lambda: self._jog(1, 0)),
-            self._button("↓ Y-", lambda: self._jog(0, -1)),
-            self._button("↑ Y+", lambda: self._jog(0, 1)),
+        # 끝으로 이동: 아두이노에 저장된 작업 영역의 각 끝으로 펜을 옮긴다 (다른 축은 그대로)
+        self._move_buttons = [
+            self._button("← 왼쪽 끝으로", lambda: self._move_to_edge("ML", "왼쪽 끝")),
+            self._button("→ 오른쪽 끝으로", lambda: self._move_to_edge("MR", "오른쪽 끝")),
+            self._button("↓ 아래 끝으로", lambda: self._move_to_edge("MB", "아래 끝")),
+            self._button("↑ 위 끝으로", lambda: self._move_to_edge("MT", "위 끝")),
         ]
-        self._set_origin_button = self._button("여기를 원점으로", self._set_origin)
-        self._go_origin_button = self._button("원점으로 이동", self._go_origin)
         # 끝 설정: 펜을 각 끝으로 옮긴 뒤 누른다. 왼쪽/아래 끝이 원점, 오른쪽/위 끝이 작업 영역 크기
         self._edge_buttons = [
             self._button("X 왼쪽 끝", lambda: self._set_edge("EL", "왼쪽 끝 (X=0)")),
@@ -155,14 +147,11 @@ class MainWindow(QMainWindow):
         maze_row.addWidget(self._maze_button)
         maze_row.addStretch(1)
 
-        origin_row = QHBoxLayout()
-        origin_row.addWidget(QLabel("원점:"))
-        origin_row.addWidget(self._jog_step)
-        for button in self._jog_buttons:
-            origin_row.addWidget(button)
-        origin_row.addWidget(self._set_origin_button)
-        origin_row.addWidget(self._go_origin_button)
-        origin_row.addStretch(1)
+        move_row = QHBoxLayout()
+        move_row.addWidget(QLabel("이동:"))
+        for button in self._move_buttons:
+            move_row.addWidget(button)
+        move_row.addStretch(1)
 
         edge_row = QHBoxLayout()
         edge_row.addWidget(QLabel("끝 설정:"))
@@ -173,7 +162,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout()
         layout.addLayout(camera_row)
         layout.addLayout(port_row)
-        layout.addLayout(origin_row)
+        layout.addLayout(move_row)
         layout.addLayout(edge_row)
         layout.addLayout(views)
         layout.addLayout(buttons)
@@ -245,11 +234,10 @@ class MainWindow(QMainWindow):
         self._maze_cols.setEnabled(c.maze)
         self._maze_rows.setEnabled(c.maze)
         self._maze_difficulty.setEnabled(c.maze)
-        # 원점 맞추기는 연결되어 있고 그리는 중이 아닐 때만
-        jog = c.select_port and connected and not connecting
-        self._jog_step.setEnabled(jog)
-        for button in (*self._jog_buttons, *self._edge_buttons, self._set_origin_button, self._go_origin_button):
-            button.setEnabled(jog)
+        # 이동과 끝 설정은 연결되어 있고 그리는 중이 아닐 때만
+        machine = c.select_port and connected and not connecting
+        for button in (*self._move_buttons, *self._edge_buttons):
+            button.setEnabled(machine)
 
     # ---------- 카메라 ----------
 
@@ -490,22 +478,14 @@ class MainWindow(QMainWindow):
         self._disconnect()  # 다시 연결하면 GRBL 응답부터 다시 확인한다
         return " (다시 연결하세요)"
 
-    # ---------- 원점 ----------
+    # ---------- 끝 이동 / 끝 설정 ----------
 
-    def _jog(self, dx: int, dy: int) -> None:
-        step = self._jog_step.currentData()
-        # $J=는 작업 영역 제한을 무시하므로 원점 바깥으로도 옮길 수 있다
-        self._run_machine([f"$J=G91 G0 X{dx * step:g} Y{dy * step:g}"], "이동 중...", "이동했습니다")
-
-    def _set_origin(self) -> None:
-        self._run_machine(["G92 X0 Y0"], "원점 설정 중...", "지금 위치를 원점(0, 0)으로 정했습니다")
+    def _move_to_edge(self, command: str, name: str) -> None:
+        self._run_machine([f"${command}"], f"{name}으로 이동 중...", f"{name}으로 이동했습니다")
 
     def _set_edge(self, command: str, name: str) -> None:
         # 아두이노가 [MSG:Area W x H mm, ...]로 새 작업 영역을 알려 주면 상태 줄에 붙여 보여 준다
         self._run_machine([f"${command}"], f"{name} 기록 중...", f"{name} 설정 →")
-
-    def _go_origin(self) -> None:
-        self._run_machine(["G90", "G0 X0 Y0"], "원점으로 이동 중...", "원점으로 이동했습니다")
 
     def _run_machine(self, commands: list[str], busy: str, done: str) -> None:
         """그림이 아닌 짧은 명령을 보낸다. 끝나면 원래 화면 상태로 돌아간다."""
