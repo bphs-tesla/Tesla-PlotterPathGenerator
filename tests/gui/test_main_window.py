@@ -128,7 +128,7 @@ def test_connect_runs_in_background_without_freezing_gui(window, monkeypatch, qa
 
 
 def test_maze_defaults_match_work_area_ratio(window):
-    assert (window._maze_cols.value(), window._maze_rows.value()) == (20, 15)
+    assert (window._maze_cols.value(), window._maze_rows.value()) == (24, 20)
     assert window._maze_cols.minimum() == 3 and window._maze_rows.minimum() == 3
 
 

@@ -35,6 +35,7 @@ FRAME_INTERVAL_MS = 33
 READY_MESSAGE = "스페이스바나 촬영 버튼으로 촬영하세요"
 RESULT_PLACEHOLDER = "촬영하면 해칭 결과가 여기에 표시됩니다"
 MAX_MAZE_CELLS = 60
+JOG_STEPS_MM = (1.0, 10.0, 50.0)
 
 
 class MainWindow(QMainWindow):
@@ -85,14 +86,29 @@ class MainWindow(QMainWindow):
         self._pause_button = self._button("일시정지", self._toggle_pause)
         self._stop_button = self._button("정지", self._stop)
 
-        # 미로 크기 기본값 20×15칸은 작업 영역 200×150mm와 같은 비율이다
-        self._maze_cols = self._cell_count(20)
-        self._maze_rows = self._cell_count(15)
+        # 미로 크기 기본값 24×20칸은 작업 영역 300×250mm와 같은 비율이다
+        self._maze_cols = self._cell_count(24)
+        self._maze_rows = self._cell_count(20)
         self._maze_difficulty = QComboBox()
         self._maze_difficulty.addItems([d.value for d in Difficulty])
         self._maze_difficulty.setCurrentText(Difficulty.NORMAL.value)
         self._maze_difficulty.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._maze_button = self._button("미로 생성", self._make_maze)
+
+        # 원점 맞추기: 펜을 조그로 옮긴 뒤 그 자리를 원점(왼쪽 아래)으로 정한다
+        self._jog_step = QComboBox()
+        for mm in JOG_STEPS_MM:
+            self._jog_step.addItem(f"{mm:g} mm", mm)
+        self._jog_step.setCurrentIndex(1)
+        self._jog_step.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self._jog_buttons = [
+            self._button("← X-", lambda: self._jog(-1, 0)),
+            self._button("→ X+", lambda: self._jog(1, 0)),
+            self._button("↓ Y-", lambda: self._jog(0, -1)),
+            self._button("↑ Y+", lambda: self._jog(0, 1)),
+        ]
+        self._set_origin_button = self._button("여기를 원점으로", self._set_origin)
+        self._go_origin_button = self._button("원점으로 이동", self._go_origin)
 
         self._progress = QProgressBar()
         self._progress.setFormat("%v / %m 줄")
@@ -132,9 +148,19 @@ class MainWindow(QMainWindow):
         maze_row.addWidget(self._maze_button)
         maze_row.addStretch(1)
 
+        origin_row = QHBoxLayout()
+        origin_row.addWidget(QLabel("원점:"))
+        origin_row.addWidget(self._jog_step)
+        for button in self._jog_buttons:
+            origin_row.addWidget(button)
+        origin_row.addWidget(self._set_origin_button)
+        origin_row.addWidget(self._go_origin_button)
+        origin_row.addStretch(1)
+
         layout = QVBoxLayout()
         layout.addLayout(camera_row)
         layout.addLayout(port_row)
+        layout.addLayout(origin_row)
         layout.addLayout(views)
         layout.addLayout(buttons)
         layout.addLayout(maze_row)
@@ -205,6 +231,11 @@ class MainWindow(QMainWindow):
         self._maze_cols.setEnabled(c.maze)
         self._maze_rows.setEnabled(c.maze)
         self._maze_difficulty.setEnabled(c.maze)
+        # 원점 맞추기는 연결되어 있고 그리는 중이 아닐 때만
+        jog = c.select_port and connected and not connecting
+        self._jog_step.setEnabled(jog)
+        for button in (*self._jog_buttons, self._set_origin_button, self._go_origin_button):
+            button.setEnabled(jog)
 
     # ---------- 카메라 ----------
 
@@ -436,6 +467,43 @@ class MainWindow(QMainWindow):
         self._state = AppState.REVIEW
         self._disconnect()  # 다시 연결하면 GRBL 응답부터 다시 확인한다
         self._set_status(f"전송 실패: {message} (다시 연결하세요)")
+        self._apply_state()
+
+    # ---------- 원점 ----------
+
+    def _jog(self, dx: int, dy: int) -> None:
+        step = self._jog_step.currentData()
+        # $J=는 작업 영역 제한을 무시하므로 원점 바깥으로도 옮길 수 있다
+        self._run_machine([f"$J=G91 G0 X{dx * step:g} Y{dy * step:g}"], "이동 중...", "이동했습니다")
+
+    def _set_origin(self) -> None:
+        self._run_machine(["G92 X0 Y0"], "원점 설정 중...", "지금 위치를 원점(0, 0)으로 정했습니다")
+
+    def _go_origin(self) -> None:
+        self._run_machine(["G90", "G0 X0 Y0"], "원점으로 이동 중...", "원점으로 이동했습니다")
+
+    def _run_machine(self, commands: list[str], busy: str, done: str) -> None:
+        """그림이 아닌 짧은 명령을 보낸다. 끝나면 원래 화면 상태로 돌아간다."""
+        if self._sender is None or self._state in (AppState.SENDING, AppState.PAUSED):
+            return
+        previous = self._state
+        self._state = AppState.SENDING
+        self._set_status(busy)
+        self._apply_state()
+        self._worker = SendThread(self._sender, commands, self)
+        self._worker.completed.connect(lambda finished: self._on_machine_done(previous, done if finished else "정지했습니다"))
+        self._worker.failed.connect(lambda message: self._on_machine_failed(previous, message))
+        self._worker.start()
+
+    def _on_machine_done(self, previous: AppState, message: str) -> None:
+        self._state = previous
+        self._set_status(message)
+        self._apply_state()
+
+    def _on_machine_failed(self, previous: AppState, message: str) -> None:
+        self._state = previous
+        self._disconnect()  # 다시 연결하면 GRBL 응답부터 다시 확인한다
+        self._set_status(f"명령 실패: {message} (다시 연결하세요)")
         self._apply_state()
 
     # ---------- 종료 ----------

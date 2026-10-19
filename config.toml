@@ -1,8 +1,9 @@
 # 플로터 설정. 항목을 지우면 기본값이 쓰입니다.
 
 # 그릴 수 있는 영역 (mm). 그림은 비율을 유지한 채 이 안에 맞춰집니다.
-work_width_mm = 200.0
-work_height_mm = 150.0
+# 아두이노에서 $L로 확인한 작업 영역과 같게 맞춥니다.
+work_width_mm = 300.0
+work_height_mm = 250.0
 
 # 펜 명령. 서보 GRBL 기본값. Z축이면 예: pen_down = "G1 Z0 F500", pen_up = "G0 Z5"
 pen_down = "M3 S90"
