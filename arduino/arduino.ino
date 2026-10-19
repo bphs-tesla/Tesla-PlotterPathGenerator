@@ -588,6 +588,16 @@ uint8_t executeLine(char* line) {
   if (limitsOn && !jogging &&
       (tx < -margin || tx > maxXMM + margin ||
        ty < -margin || ty > maxYMM + margin)) {
+    // 어떤 좌표가 어느 영역을 벗어났는지 알려 준다 (GUI가 오류 메시지에 붙여 보여 줌)
+    Serial.print(F("[MSG:Out of area: X"));
+    Serial.print(tx, 2);
+    Serial.print(F(" Y"));
+    Serial.print(ty, 2);
+    Serial.print(F(", area 0~"));
+    Serial.print(maxXMM, 2);
+    Serial.print(F(" x 0~"));
+    Serial.print(maxYMM, 2);
+    Serial.println(F(" mm]"));
     return ERR_SOFT_LIMIT;
   }
 

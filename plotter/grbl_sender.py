@@ -23,6 +23,10 @@ class GrblError(Exception):
     """GRBL 통신 실패. 메시지는 사용자에게 그대로 보여준다."""
 
 
+class GrblReplyError(GrblError):
+    """GRBL이 명령을 거부했다 (error:N / ALARM). 연결 자체는 살아 있다."""
+
+
 def available_ports() -> list[str]:
     return sorted(port.device for port in list_ports.comports())
 
@@ -132,7 +136,8 @@ class GrblSender:
             if reply == "ok":
                 return True
             if reply.startswith(("error", "ALARM")):
-                raise GrblError(f"{index}번째 줄 '{command}'에서 GRBL 오류: {reply}")
+                detail = f" ({self.messages[-1]})" if self.messages else ""
+                raise GrblReplyError(f"{index}번째 줄 '{command}'에서 GRBL 오류: {reply}{detail}")
             if reply.startswith("[MSG:") and reply.endswith("]"):
                 self.messages.append(reply[len("[MSG:"):-1])
             now = time.monotonic()

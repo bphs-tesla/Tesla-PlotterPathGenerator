@@ -41,11 +41,14 @@ class SendThread(QThread):
         super().__init__(parent)
         self._sender = sender
         self._commands = commands
+        # 실패 원인. GRBL이 명령만 거부한 것(GrblReplyError)이면 연결을 끊지 않아도 된다
+        self.error: Exception | None = None
 
     def run(self) -> None:
         try:
             finished = self._sender.stream(self._commands, self.progress.emit)
         except GrblError as exc:
+            self.error = exc
             self.failed.emit(str(exc))
             return
         except Exception as exc:

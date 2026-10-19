@@ -479,9 +479,16 @@ class MainWindow(QMainWindow):
 
     def _on_send_failed(self, message: str) -> None:
         self._state = AppState.REVIEW
-        self._disconnect()  # 다시 연결하면 GRBL 응답부터 다시 확인한다
-        self._set_status(f"전송 실패: {message} (다시 연결하세요)")
+        self._set_status(f"전송 실패: {message}{self._after_failure()}")
         self._apply_state()
+
+    def _after_failure(self) -> str:
+        """실패한 뒤 연결을 정리하고, 상태 줄에 덧붙일 안내를 돌려준다."""
+        if isinstance(getattr(self._worker, "error", None), grbl_sender.GrblReplyError):
+            # 아두이노가 명령만 거부했다. 다시 연결하면 아두이노가 재부팅되어 원점을 잃으므로 연결을 유지한다
+            return ""
+        self._disconnect()  # 다시 연결하면 GRBL 응답부터 다시 확인한다
+        return " (다시 연결하세요)"
 
     # ---------- 원점 ----------
 
@@ -524,8 +531,7 @@ class MainWindow(QMainWindow):
 
     def _on_machine_failed(self, previous: AppState, message: str) -> None:
         self._state = previous
-        self._disconnect()  # 다시 연결하면 GRBL 응답부터 다시 확인한다
-        self._set_status(f"명령 실패: {message} (다시 연결하세요)")
+        self._set_status(f"명령 실패: {message}{self._after_failure()}")
         self._apply_state()
 
     # ---------- 종료 ----------
