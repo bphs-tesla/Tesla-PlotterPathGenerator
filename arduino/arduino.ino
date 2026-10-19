@@ -49,8 +49,8 @@ const uint8_t PEN_SERVO_PIN = 10;
 // 실제 기구에 맞게 보정:
 // - 방향이 반대면 PEN_DOWN_US와 PEN_UP_US를 서로 바꾼다
 // - 너무 많이/적게 돌면 PEN_DOWN_MS / PEN_UP_MS를 조절한다
-const int PEN_DOWN_US = 1300;
-const int PEN_UP_US = 1700;
+const int PEN_DOWN_US = 1700;
+const int PEN_UP_US = 1300;
 const unsigned long PEN_DOWN_MS = 250;
 const unsigned long PEN_UP_MS = 250;
 
