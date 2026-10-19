@@ -75,6 +75,8 @@ class GrblSender:
         self._write_lock = threading.RLock()
         self._paused = threading.Event()
         self._stop = threading.Event()
+        # 마지막 stream() 동안 받은 [MSG:...]의 내용 (예: 끝 설정 뒤 작업 영역 크기)
+        self.messages: list[str] = []
 
     def pause(self) -> None:
         self._paused.set()
@@ -90,6 +92,7 @@ class GrblSender:
     def stream(self, commands: list[str], on_progress: Callable[[int, int], None] = lambda done, total: None) -> bool:
         self._stop.clear()
         self._paused.clear()
+        self.messages = []
         try:
             finished = self._send_all(commands, on_progress)
         except GrblError:
@@ -130,6 +133,8 @@ class GrblSender:
                 return True
             if reply.startswith(("error", "ALARM")):
                 raise GrblError(f"{index}번째 줄 '{command}'에서 GRBL 오류: {reply}")
+            if reply.startswith("[MSG:") and reply.endswith("]"):
+                self.messages.append(reply[len("[MSG:"):-1])
             now = time.monotonic()
             if reply.startswith("<") or self._paused.is_set():
                 # 상태 보고가 오면 아직 그리는 중이다. G4/M5의 ok는 앞선 동작이 끝나야 온다
@@ -139,7 +144,7 @@ class GrblSender:
             if now >= next_status:
                 self._write(_STATUS)
                 next_status = now + self._status_interval_s
-            # 그 밖의 응답([MSG:...] 등)은 무시
+            # 그 밖의 응답은 무시
 
     def _wait_for_hold(self) -> None:
         """멈춤(!) 뒤 감속이 끝날 때까지(Hold:0 또는 Idle) 기다린다."""

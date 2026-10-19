@@ -109,6 +109,13 @@ class MainWindow(QMainWindow):
         ]
         self._set_origin_button = self._button("여기를 원점으로", self._set_origin)
         self._go_origin_button = self._button("원점으로 이동", self._go_origin)
+        # 끝 설정: 펜을 각 끝으로 옮긴 뒤 누른다. 왼쪽/아래 끝이 원점, 오른쪽/위 끝이 작업 영역 크기
+        self._edge_buttons = [
+            self._button("X 왼쪽 끝", lambda: self._set_edge("EL", "왼쪽 끝 (X=0)")),
+            self._button("X 오른쪽 끝", lambda: self._set_edge("ER", "오른쪽 끝")),
+            self._button("Y 아래 끝", lambda: self._set_edge("EB", "아래 끝 (Y=0)")),
+            self._button("Y 위 끝", lambda: self._set_edge("ET", "위 끝")),
+        ]
 
         self._progress = QProgressBar()
         self._progress.setFormat("%v / %m 줄")
@@ -157,10 +164,17 @@ class MainWindow(QMainWindow):
         origin_row.addWidget(self._go_origin_button)
         origin_row.addStretch(1)
 
+        edge_row = QHBoxLayout()
+        edge_row.addWidget(QLabel("끝 설정:"))
+        for button in self._edge_buttons:
+            edge_row.addWidget(button)
+        edge_row.addStretch(1)
+
         layout = QVBoxLayout()
         layout.addLayout(camera_row)
         layout.addLayout(port_row)
         layout.addLayout(origin_row)
+        layout.addLayout(edge_row)
         layout.addLayout(views)
         layout.addLayout(buttons)
         layout.addLayout(maze_row)
@@ -234,7 +248,7 @@ class MainWindow(QMainWindow):
         # 원점 맞추기는 연결되어 있고 그리는 중이 아닐 때만
         jog = c.select_port and connected and not connecting
         self._jog_step.setEnabled(jog)
-        for button in (*self._jog_buttons, self._set_origin_button, self._go_origin_button):
+        for button in (*self._jog_buttons, *self._edge_buttons, self._set_origin_button, self._go_origin_button):
             button.setEnabled(jog)
 
     # ---------- 카메라 ----------
@@ -479,6 +493,10 @@ class MainWindow(QMainWindow):
     def _set_origin(self) -> None:
         self._run_machine(["G92 X0 Y0"], "원점 설정 중...", "지금 위치를 원점(0, 0)으로 정했습니다")
 
+    def _set_edge(self, command: str, name: str) -> None:
+        # 아두이노가 [MSG:Area W x H mm, ...]로 새 작업 영역을 알려 주면 상태 줄에 붙여 보여 준다
+        self._run_machine([f"${command}"], f"{name} 기록 중...", f"{name} 설정 →")
+
     def _go_origin(self) -> None:
         self._run_machine(["G90", "G0 X0 Y0"], "원점으로 이동 중...", "원점으로 이동했습니다")
 
@@ -497,6 +515,10 @@ class MainWindow(QMainWindow):
 
     def _on_machine_done(self, previous: AppState, message: str) -> None:
         self._state = previous
+        if self._sender is not None and self._sender.messages:
+            message = f"{message} {self._sender.messages[-1]}"
+            if self._sender.messages[-1].startswith("Area"):
+                message += " (config.toml의 작업 영역도 이 크기로 맞추세요)"
         self._set_status(message)
         self._apply_state()
 
