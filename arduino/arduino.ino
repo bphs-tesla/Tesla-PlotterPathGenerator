@@ -1,12 +1,13 @@
 #include <Arduino.h>
 #include <AFMotor.h>
 #include <EEPROM.h>
+#include <Servo.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 // --------------------------------------------------
-// Etch-a-Sketch G-code 컨트롤러
+// 펜 플로터 G-code 컨트롤러 (L293D 모터 실드 + 서보 펜)
 //
 // plotter/gcode.py가 만드는 G-code를 GRBL처럼 받아 실행한다.
 // - 한 줄을 받으면 실행을 끝낸 뒤 "ok" 또는 "error:N"으로 응답
@@ -19,7 +20,8 @@
 //   G20 / G21     : inch / mm
 //   G90 / G91     : 절대 / 상대 좌표
 //   G92 X Y       : 현재 위치를 지정한 좌표로 설정 (원점 맞추기)
-//   M3 / M5       : 펜 내림 / 올림 (Etch-a-Sketch는 펜이 없으므로 무시)
+//   M3 S<각도>    : 펜 내림 (S가 없으면 PEN_DOWN_ANGLE)
+//   M5            : 펜 올림 (PEN_UP_ANGLE)
 //   $             : 도움말
 //   $U            : 작업 영역 제한 해제 (끝점 측정용)
 //   $EL / $EB     : 현재 위치를 왼쪽 / 아래 끝으로 (그 자리가 X=0 / Y=0)
@@ -35,6 +37,19 @@
 // motorB = M3 + M4
 AF_Stepper motorA(500, 1);
 AF_Stepper motorB(500, 2);
+
+// 펜 서보: 실드의 SER1 단자 = 아두이노 10번 핀 (SERVO_2는 9번)
+// Servo 라이브러리는 Timer1을 쓰고 AFMotor 스테퍼는 Timer0/2를 써서 겹치지 않는다
+Servo penServo;
+const uint8_t PEN_SERVO_PIN = 10;
+
+// 실제 기구에 맞게 보정. config.toml의 pen_down = "M3 S90"이면 S90이 내림 각도로 쓰인다
+const int PEN_UP_ANGLE = 30;
+const int PEN_DOWN_ANGLE = 90;
+// 각도가 바뀐 뒤 서보가 다 움직일 때까지 기다리는 시간
+const unsigned long PEN_MOVE_MS = 150;
+
+int penAngle = -1;
 
 // 실제 기구에 맞게 보정
 const float STEPS_PER_MM = 80.0f;
@@ -129,8 +144,8 @@ void printBanner() {
 }
 
 void printHelp() {
-  Serial.println(F("[MSG:Etch-a-Sketch G-code controller]"));
-  Serial.println(F("[MSG:G0/G1 X Y F, G4 P, G20/G21, G90/G91, G92, M3/M5]"));
+  Serial.println(F("[MSG:Pen plotter G-code controller]"));
+  Serial.println(F("[MSG:G0/G1 X Y F, G4 P, G20/G21, G90/G91, G92, M3 S / M5 pen]"));
   Serial.println(F("[MSG:Realtime: ! hold, ~ resume, ? status, Ctrl-X reset]"));
   Serial.println(F("[MSG:Jog example: G91 G0 X10  then  G90]"));
   Serial.println(F("[MSG:Set origin here: G92 X0 Y0]"));
@@ -412,6 +427,18 @@ bool moveTo(float xMM, float yMM, float feed) {
 }
 
 // --------------------------------------------------
+// 펜 (서보)
+// --------------------------------------------------
+
+void setPen(int angle) {
+  if (angle == penAngle) return;
+  penServo.write(angle);
+  penAngle = angle;
+  // 서보가 다 움직이기 전에 이동을 시작하면 선이 끌린다
+  waitUs(PEN_MOVE_MS * 1000UL);
+}
+
+// --------------------------------------------------
 // G-code 해석
 // --------------------------------------------------
 
@@ -442,10 +469,11 @@ uint8_t executeLine(char* line) {
   if (line[0] == '$') return executeSetting(line + 1);
 
   int8_t motion = -1;   // 0 = G0, 1 = G1
+  int8_t pen = -1;      // 0 = 올림(M5), 1 = 내림(M3/M4)
   bool dwell = false;
   bool setPosition = false;
-  bool hasX = false, hasY = false, hasP = false;
-  float x = 0, y = 0, p = 0;
+  bool hasX = false, hasY = false, hasP = false, hasS = false;
+  float x = 0, y = 0, p = 0, s = 0;
 
   char* cursor = line;
 
@@ -480,12 +508,16 @@ uint8_t executeLine(char* line) {
 
       case 'M': {
         int code = (int)value;
-        // 펜 올림/내림과 프로그램 종료: Etch-a-Sketch에는 펜이 없어 무시
-        if (code == 0 || code == 2 || code == 3 || code == 4 ||
-            code == 5 || code == 30) {
-          break;
+        if (code == 3 || code == 4) {
+          pen = 1;
+        } else if (code == 5) {
+          pen = 0;
+        } else if (code == 0 || code == 2 || code == 30) {
+          // 프로그램 정지/종료: 할 일 없음
+        } else {
+          return ERR_UNSUPPORTED;
         }
-        return ERR_UNSUPPORTED;
+        break;
       }
 
       case 'X': x = value; hasX = true; break;
@@ -497,8 +529,9 @@ uint8_t executeLine(char* line) {
         feedMMmin = inches ? value * 25.4f : value;
         break;
 
-      case 'Z':   // Z축 펜 명령도 무시
-      case 'S':   // 서보 각도 무시
+      case 'S': s = value; hasS = true; break;
+
+      case 'Z':   // Z축은 없으므로 무시
         break;
 
       default:
@@ -507,6 +540,10 @@ uint8_t executeLine(char* line) {
   }
 
   float unit = inches ? 25.4f : 1.0f;
+
+  // 펜은 같은 줄의 이동보다 먼저 움직인다
+  if (pen == 1) setPen(hasS ? (int)constrain(s, 0, 180) : PEN_DOWN_ANGLE);
+  else if (pen == 0) setPen(PEN_UP_ANGLE);
 
   if (dwell) {
     // G4 P0은 앞의 이동이 끝났다는 확인용. 이동은 동기식이라 바로 ok.
@@ -559,6 +596,9 @@ uint8_t executeLine(char* line) {
 void softReset() {
   resetRequested = false;
   holding = false;
+  // GRBL처럼 리셋하면 펜을 올린다
+  penServo.write(PEN_UP_ANGLE);
+  penAngle = PEN_UP_ANGLE;
   absoluteMode = true;
   inches = false;
   feedMMmin = DEFAULT_FEED_MM_MIN;
@@ -577,6 +617,11 @@ void setup() {
 
   motorA.setSpeed(5);
   motorB.setSpeed(5);
+
+  // 켜자마자 펜을 올린다
+  penServo.attach(PEN_SERVO_PIN);
+  penServo.write(PEN_UP_ANGLE);
+  penAngle = PEN_UP_ANGLE;
 
   loadLimits();
 
