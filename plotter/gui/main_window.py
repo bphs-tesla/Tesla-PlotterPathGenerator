@@ -130,6 +130,10 @@ class MainWindow(QMainWindow):
         self._progress.setFormat("%v / %m 줄")
         self._progress.setValue(0)
         self._status = QLabel()
+        # 아두이노에 저장된 작업 영역과 현재 위치. 연결할 때와 이동 / 끝 설정 / 그리기 뒤에 갱신한다
+        self._machine_label = QLabel()
+        self._machine_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._show_machine_info(None)
 
         camera_row = QHBoxLayout()
         camera_row.addWidget(QLabel("카메라:"))
@@ -196,6 +200,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(camera_row)
         layout.addLayout(port_row)
         layout.addLayout(move_row)
+        layout.addWidget(self._machine_label)
         layout.addWidget(self._edge_panel)
         layout.addLayout(views)
         layout.addLayout(buttons)
@@ -436,6 +441,7 @@ class MainWindow(QMainWindow):
         self._sender = grbl_sender.GrblSender(self._serial, self._cfg.pen_up)
         self._settings.setValue("port", name)
         self._set_status(f"{name}에 연결됨")
+        self._show_machine_info(self._connect_worker.info if self._connect_worker is not None else None)
         self._apply_state()
 
     def _on_connect_failed(self, message: str) -> None:
@@ -451,6 +457,7 @@ class MainWindow(QMainWindow):
                 self._serial.close()
         self._serial = None
         self._sender = None
+        self._show_machine_info(None)
         self._apply_state()
 
     # ---------- 전송 ----------
@@ -463,8 +470,9 @@ class MainWindow(QMainWindow):
         self._state = AppState.SENDING
         self._set_status("그리는 중...")
         self._apply_state()
-        self._worker = SendThread(self._sender, self._commands, self)
-        self._worker.progress.connect(lambda done, total: self._progress.setValue(done))
+        # 다 그린 뒤 $L로 현재 위치를 다시 읽는다 (진행 막대는 그림 줄 수까지만)
+        self._worker = SendThread(self._sender, [*self._commands, "$L"], self)
+        self._worker.progress.connect(lambda done, total: self._progress.setValue(min(done, len(self._commands))))
         self._worker.completed.connect(self._on_send_completed)
         self._worker.failed.connect(self._on_send_failed)
         self._worker.start()
@@ -497,6 +505,7 @@ class MainWindow(QMainWindow):
     def _on_send_completed(self, finished: bool) -> None:
         self._state = AppState.REVIEW
         self._set_status("그리기 완료" if finished else "정지했습니다. 펜을 올렸습니다")
+        self._update_machine_info()
         self._apply_state()
 
     def _on_send_failed(self, message: str) -> None:
@@ -528,8 +537,8 @@ class MainWindow(QMainWindow):
         self._run_machine([f"${command}"], f"{name}으로 이동 중...", f"{name}으로 이동했습니다")
 
     def _set_edge(self, command: str, name: str) -> None:
-        # 아두이노가 [MSG:Area W x H mm, ...]로 새 작업 영역을 알려 주면 상태 줄에 붙여 보여 준다
-        self._run_machine([f"${command}"], f"{name} 기록 중...", f"{name} 설정 →")
+        # 새 작업 영역은 설정값 줄에 나온다
+        self._run_machine([f"${command}"], f"{name} 기록 중...", f"{name}을(를) 설정했습니다")
 
     def _run_machine(self, commands: list[str], busy: str, done: str) -> None:
         """그림이 아닌 짧은 명령을 보낸다. 끝나면 원래 화면 상태로 돌아간다."""
@@ -539,19 +548,49 @@ class MainWindow(QMainWindow):
         self._state = AppState.SENDING
         self._set_status(busy)
         self._apply_state()
-        self._worker = SendThread(self._sender, commands, self)
+        # 끝에 $L을 붙여 작업 영역과 현재 위치를 다시 읽는다
+        self._worker = SendThread(self._sender, [*commands, "$L"], self)
         self._worker.completed.connect(lambda finished: self._on_machine_done(previous, done if finished else "정지했습니다"))
         self._worker.failed.connect(lambda message: self._on_machine_failed(previous, message))
         self._worker.start()
 
     def _on_machine_done(self, previous: AppState, message: str) -> None:
         self._state = previous
-        if self._sender is not None and self._sender.messages:
-            message = f"{message} {self._sender.messages[-1]}"
-            if self._sender.messages[-1].startswith("Area"):
-                message += " (config.toml의 작업 영역도 이 크기로 맞추세요)"
+        if self._sender is not None:
+            # 설정값이 아닌 메시지(예: 끝이 기록되지 않음)는 상태 줄에 붙여 보여 준다
+            notes = [m for m in self._sender.messages if grbl_sender.parse_machine_info(m) is None]
+            if notes:
+                message = f"{message} {notes[-1]}"
         self._set_status(message)
+        self._update_machine_info()
         self._apply_state()
+
+    def _update_machine_info(self) -> None:
+        """마지막 전송에서 받은 $L 응답으로 설정값 줄을 갱신한다."""
+        if self._sender is None:
+            return
+        info = grbl_sender.latest_machine_info(self._sender.messages)
+        if info is not None:
+            self._show_machine_info(info)
+
+    def _show_machine_info(self, info: grbl_sender.MachineInfo | None) -> None:
+        if info is None:
+            text = "아두이노 설정값: -" if self._serial is None else "아두이노 설정값: 읽지 못함 (펌웨어를 새로 올리세요)"
+            self._machine_label.setText(text)
+            self._machine_label.setStyleSheet("")
+            return
+        parts = [f"아두이노 작업 영역: X 0 ~ {info.width_mm:.2f} mm, Y 0 ~ {info.height_mm:.2f} mm"]
+        if info.x_mm is not None and info.y_mm is not None:
+            parts.append(f"현재 위치: X {info.x_mm:.2f}, Y {info.y_mm:.2f}")
+        if not info.limits_on:
+            parts.append("영역 제한 꺼짐")
+        width, height = self._cfg.work_width_mm, self._cfg.work_height_mm
+        # 원점 이동이 스텝(1/80 mm) 단위라 아주 작은 차이는 무시한다
+        mismatch = abs(info.width_mm - width) > 0.05 or abs(info.height_mm - height) > 0.05
+        if mismatch:
+            parts.append(f"⚠ G-code는 {width:g} × {height:g} mm 기준 (config.toml) → 영역 밖 오류(15)가 날 수 있음")
+        self._machine_label.setText("  |  ".join(parts))
+        self._machine_label.setStyleSheet("color: #c0392b;" if mismatch else "")
 
     def _on_machine_failed(self, previous: AppState, message: str) -> None:
         self._state = previous

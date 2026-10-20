@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -68,6 +70,7 @@ class ConnectThread(QThread):
         self._port_name = port_name
         self._baud = baud
         self.port = None  # 창을 닫을 때 시그널이 처리되지 않았어도 포트를 닫을 수 있게 남겨 둔다
+        self.info: grbl_sender.MachineInfo | None = None  # 아두이노의 작업 영역 / 현재 위치
 
     def run(self) -> None:
         try:
@@ -78,4 +81,7 @@ class ConnectThread(QThread):
         except Exception as exc:
             self.failed.emit(f"연결 중 예상치 못한 오류: {exc}")
             return
+        # 설정값은 보여 주기만 하므로 읽지 못해도 연결은 그대로 쓴다
+        with contextlib.suppress(Exception):
+            self.info = grbl_sender.query_machine_info(self.port)
         self.connected.emit(self.port)

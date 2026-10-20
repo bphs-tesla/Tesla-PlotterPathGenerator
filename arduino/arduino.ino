@@ -168,6 +168,11 @@ void printLimits() {
   Serial.print(maxYMM, 2);
   Serial.print(F(" mm, limits "));
   Serial.print(limitsOn ? F("ON") : F("OFF"));
+  // GUI가 설정값과 함께 보여 줄 현재 위치 (원점 = 왼쪽 아래)
+  Serial.print(F(", pos "));
+  Serial.print(mmX(), 2);
+  Serial.print(',');
+  Serial.print(mmY(), 2);
   Serial.println(F("]"));
 }
 

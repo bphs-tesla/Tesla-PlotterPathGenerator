@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import contextlib
+import re
 import threading
 import time
+from dataclasses import dataclass
 from typing import Callable
 
 import serial
@@ -25,6 +27,54 @@ class GrblError(Exception):
 
 class GrblReplyError(GrblError):
     """GRBL이 명령을 거부했다 (error:N / ALARM). 연결 자체는 살아 있다."""
+
+
+@dataclass(frozen=True)
+class MachineInfo:
+    """아두이노가 $L로 알려 주는 작업 영역과 현재 위치 (mm, 원점 = 왼쪽 아래)."""
+
+    width_mm: float
+    height_mm: float
+    limits_on: bool
+    x_mm: float | None = None  # 위치를 보내지 않는 예전 펌웨어면 None
+    y_mm: float | None = None
+
+
+_AREA = re.compile(r"Area (-?[\d.]+) x (-?[\d.]+) mm, limits (\w+)(?:, pos (-?[\d.]+),(-?[\d.]+))?")
+
+
+def parse_machine_info(message: str) -> MachineInfo | None:
+    """[MSG:...] 안의 'Area W x H mm, limits ON, pos X,Y'를 읽는다. 다른 메시지면 None."""
+    match = _AREA.match(message)
+    if match is None:
+        return None
+    width, height, limits, x, y = match.groups()
+    return MachineInfo(
+        float(width), float(height), limits == "ON",
+        float(x) if x is not None else None, float(y) if y is not None else None,
+    )
+
+
+def latest_machine_info(messages: list[str]) -> MachineInfo | None:
+    for message in reversed(messages):
+        info = parse_machine_info(message)
+        if info is not None:
+            return info
+    return None
+
+
+def query_machine_info(port, timeout_s: float = 2.0) -> MachineInfo | None:
+    """연결 직후 $L을 보내 작업 영역을 읽는다. 답이 없으면 None."""
+    port.write(b"$L\n")
+    info = None
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        reply = _read_text(port)
+        if reply.startswith("[MSG:") and reply.endswith("]"):
+            info = parse_machine_info(reply[len("[MSG:"):-1]) or info
+        elif reply == "ok" or reply.startswith("error"):
+            break
+    return info
 
 
 def available_ports() -> list[str]:
