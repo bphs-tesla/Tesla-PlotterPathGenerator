@@ -36,22 +36,33 @@ class MachineInfo:
     width_mm: float
     height_mm: float
     limits_on: bool
-    x_mm: float | None = None  # 위치를 보내지 않는 예전 펌웨어면 None
+    # 예전 펌웨어가 보내지 않는 값은 None
+    x_mm: float | None = None
     y_mm: float | None = None
+    speed_mm_min: float | None = None  # 최고 속도
+    pen_up_deg: int | None = None  # 펜 올림 / 내림 서보 각도
+    pen_down_deg: int | None = None
 
 
-_AREA = re.compile(r"Area (-?[\d.]+) x (-?[\d.]+) mm, limits (\w+)(?:, pos (-?[\d.]+),(-?[\d.]+))?")
+_AREA = re.compile(
+    r"Area (-?[\d.]+) x (-?[\d.]+) mm, limits (\w+)"
+    r"(?:, pos (-?[\d.]+),(-?[\d.]+))?(?:, speed ([\d.]+))?(?:, pen (\d+)/(\d+))?"
+)
+
+
+def _optional(value: str | None, kind=float):
+    return kind(value) if value is not None else None
 
 
 def parse_machine_info(message: str) -> MachineInfo | None:
-    """[MSG:...] 안의 'Area W x H mm, limits ON, pos X,Y'를 읽는다. 다른 메시지면 None."""
+    """[MSG:...] 안의 'Area W x H mm, limits ON, pos X,Y, speed V, pen U/D'를 읽는다. 다른 메시지면 None."""
     match = _AREA.match(message)
     if match is None:
         return None
-    width, height, limits, x, y = match.groups()
+    width, height, limits, x, y, speed, pen_up, pen_down = match.groups()
     return MachineInfo(
         float(width), float(height), limits == "ON",
-        float(x) if x is not None else None, float(y) if y is not None else None,
+        _optional(x), _optional(y), _optional(speed), _optional(pen_up, int), _optional(pen_down, int),
     )
 
 

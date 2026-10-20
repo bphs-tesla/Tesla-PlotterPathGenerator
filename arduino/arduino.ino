@@ -20,8 +20,8 @@
 //   G20 / G21     : inch / mm
 //   G90 / G91     : 절대 / 상대 좌표
 //   G92 X Y       : 현재 위치를 지정한 좌표로 설정 (원점 맞추기)
-//   M3            : 펜 내림 (360° 서보를 PEN_DOWN_MS 동안 돌림, S는 무시)
-//   M5            : 펜 올림 (반대로 PEN_UP_MS 동안 돌림)
+//   M3            : 펜 내림 (서보를 펜 내림 각도로, S는 무시)
+//   M5            : 펜 올림 (서보를 펜 올림 각도로)
 //   $             : 도움말
 //   $U            : 작업 영역 제한 해제 (끝점 측정용)
 //   $EL / $EB     : 현재 위치를 왼쪽 / 아래 끝으로 (그 자리가 X=0 / Y=0)
@@ -31,6 +31,8 @@
 //   $RL           : 작업 영역을 기본값으로 되돌림
 //   $J=G91 G0 X10 : 조그 이동 (작업 영역 제한 무시, 끝을 처음 정할 때)
 //   $ML/$MR/$MB/$MT : 왼쪽 / 오른쪽 / 아래 / 위 끝으로 이동
+//   $V=<mm/분>    : 최고 속도 (EEPROM 저장)
+//   $PU=<도> / $PD=<도> : 펜 올림 / 내림 서보 각도 (EEPROM 저장)
 // 위치와 펜 상태는 EEPROM에 저장되어 재부팅해도 원점이 유지된다
 // --------------------------------------------------
 
@@ -45,18 +47,18 @@ AF_Stepper motorB(500, 2);
 Servo penServo;
 const uint8_t PEN_SERVO_PIN = 10;
 
-// 360° (연속 회전) SG90: 각도가 아니라 회전 속도/방향을 정한다.
-// 1500us 근처가 정지, 그보다 작으면 한쪽, 크면 반대쪽으로 돈다.
-// 펜을 올리고 내릴 때 정해진 시간만큼 돌린 뒤 신호를 끊어 멈춘다.
-// 실제 기구에 맞게 보정:
-// - 방향이 반대면 PEN_DOWN_US와 PEN_UP_US를 서로 바꾼다
-// - 너무 많이/적게 돌면 PEN_DOWN_MS / PEN_UP_MS를 조절한다
-const int PEN_DOWN_US = 1700;
-const int PEN_UP_US = 1300;
-const unsigned long PEN_DOWN_MS = 250;
-const unsigned long PEN_UP_MS = 250;
+// MG996R (180° 각도 서보): 펜 올림 / 내림 각도로 돌린 뒤 신호를 계속 보내 그 자리를 버틴다.
+// 각도는 GUI($PU= / $PD=)에서 바꾸며 EEPROM에 저장된다. 아래는 처음 값.
+// MG996R은 전류를 많이 써서 아두이노 5V로는 리셋될 수 있다. 가능하면 서보 전원을 따로 준다.
+const uint8_t DEFAULT_PEN_UP_ANGLE = 90;
+const uint8_t DEFAULT_PEN_DOWN_ANGLE = 45;
+// 서보가 각도까지 도는 동안 기다리는 시간 (MG996R은 60°에 약 0.2초)
+const unsigned long PEN_MOVE_MS = 300;
 
-// 전원을 켤 때 펜은 올라가 있다고 가정한다 (켜기 전에 펜을 올려 둔다)
+uint8_t penUpAngle = DEFAULT_PEN_UP_ANGLE;
+uint8_t penDownAngle = DEFAULT_PEN_DOWN_ANGLE;
+
+// 켤 때 펜을 올린다
 bool penDown = false;
 
 // 실제 기구에 맞게 보정
@@ -93,9 +95,17 @@ bool topKnown = false;
 long rightSteps = 0;
 long topSteps = 0;
 
-// 스텝 사이 최소 간격. 이보다 빠르면 모터가 스텝을 놓친다.
-// G0과 F가 큰 G1은 이 속도로 움직인다.
-const unsigned long MIN_STEP_DELAY_US = 5000;
+// 최고 속도 (mm/분, X나 Y로 똑바로 갈 때). 너무 빠르면 모터가 스텝을 놓친다.
+// G0과 F가 큰 G1은 이 속도로 움직인다. GUI($V=)에서 바꾸며 EEPROM에 저장된다.
+const float DEFAULT_MAX_SPEED_MM_MIN = 150.0f;  // 스텝 간격 5ms
+const float MIN_SPEED_MM_MIN = 10.0f;
+const float MAX_SPEED_MM_MIN = 3000.0f;          // 스텝 간격 0.25ms
+float maxSpeedMMmin = DEFAULT_MAX_SPEED_MM_MIN;
+
+// 한 모터의 스텝 사이 최소 간격 (us)
+unsigned long minStepDelayUs() {
+  return (unsigned long)(60e6f / (maxSpeedMMmin * STEPS_PER_MM));
+}
 
 const float DEFAULT_FEED_MM_MIN = 600.0f;
 
@@ -159,6 +169,7 @@ void printHelp() {
   Serial.println(F("[MSG:Set origin here: G92 X0 Y0]"));
   Serial.println(F("[MSG:Edges: move with $J=, then $EL / $ER / $EB / $ET]"));
   Serial.println(F("[MSG:$L show area, $RL reset area]"));
+  Serial.println(F("[MSG:$V=<mm/min> speed, $PU=<deg> / $PD=<deg> pen angles]"));
 }
 
 void printLimits() {
@@ -173,6 +184,12 @@ void printLimits() {
   Serial.print(mmX(), 2);
   Serial.print(',');
   Serial.print(mmY(), 2);
+  Serial.print(F(", speed "));
+  Serial.print(maxSpeedMMmin, 0);
+  Serial.print(F(", pen "));
+  Serial.print(penUpAngle);
+  Serial.print('/');
+  Serial.print(penDownAngle);
   Serial.println(F("]"));
 }
 
@@ -193,6 +210,38 @@ void loadLimits() {
 void saveLimits() {
   SavedLimits saved = { LIMITS_MAGIC, maxXMM, maxYMM };
   EEPROM.put(0, saved);
+}
+
+// --------------------------------------------------
+// 속도 / 펜 각도 저장 / 불러오기
+// --------------------------------------------------
+
+const int SETTINGS_ADDR = 32;  // SavedPosition 뒤
+const uint16_t SETTINGS_MAGIC = 0xB4D2;
+
+struct SavedSettings {
+  uint16_t magic;
+  float maxSpeed;
+  uint8_t penUp;
+  uint8_t penDown;
+};
+
+void loadSettings() {
+  SavedSettings saved;
+  EEPROM.get(SETTINGS_ADDR, saved);
+
+  if (saved.magic == SETTINGS_MAGIC &&
+      saved.maxSpeed >= MIN_SPEED_MM_MIN && saved.maxSpeed <= MAX_SPEED_MM_MIN &&
+      saved.penUp <= 180 && saved.penDown <= 180) {
+    maxSpeedMMmin = saved.maxSpeed;
+    penUpAngle = saved.penUp;
+    penDownAngle = saved.penDown;
+  }
+}
+
+void saveSettings() {
+  SavedSettings saved = { SETTINGS_MAGIC, maxSpeedMMmin, penUpAngle, penDownAngle };
+  EEPROM.put(SETTINGS_ADDR, saved);
 }
 
 // --------------------------------------------------
@@ -282,6 +331,13 @@ void redefinePosition(long x, long y) {
 
 uint8_t executeLine(char* line);
 
+// "150"처럼 숫자만 있는지 읽는다. 숫자가 아니면 false
+bool readSettingValue(char* text, float& value) {
+  char* end;
+  value = strtod(text, &end);
+  return end != text && *end == '\0';
+}
+
 // $ 명령. 결과 코드: 0 = ok
 uint8_t executeSetting(char* cmd) {
   if (cmd[0] == '\0') {
@@ -357,6 +413,34 @@ uint8_t executeSetting(char* cmd) {
     moving = true;
     moveTo(tx, ty, 1e9f);
     moving = false;
+    return 0;
+  }
+
+  // $V=<mm/분>: 최고 속도
+  if (cmd[0] == 'V' && cmd[1] == '=') {
+    float value;
+    if (!readSettingValue(cmd + 2, value)) return ERR_BAD_NUMBER;
+    if (value < MIN_SPEED_MM_MIN || value > MAX_SPEED_MM_MIN) return ERR_BAD_NUMBER;
+    maxSpeedMMmin = value;
+    saveSettings();
+    printLimits();
+    return 0;
+  }
+
+  // $PU=<도> / $PD=<도>: 펜 올림 / 내림 각도. 지금 그 상태면 바로 그 각도로 옮겨 확인할 수 있게 한다
+  if (cmd[0] == 'P' && (cmd[1] == 'U' || cmd[1] == 'D') && cmd[2] == '=') {
+    float value;
+    if (!readSettingValue(cmd + 3, value)) return ERR_BAD_NUMBER;
+    if (value < 0 || value > 180) return ERR_BAD_NUMBER;
+    bool down = (cmd[1] == 'D');
+    if (down) penDownAngle = (uint8_t)lroundf(value);
+    else penUpAngle = (uint8_t)lroundf(value);
+    saveSettings();
+    if (penDown == down) {
+      penServo.write(down ? penDownAngle : penUpAngle);
+      delay(PEN_MOVE_MS);
+    }
+    printLimits();
     return 0;
   }
 
@@ -483,7 +567,8 @@ bool moveTo(float xMM, float yMM, float feed) {
   float distance = sqrtf(dx * dx + dy * dy);
   float seconds = distance / (feed / 60.0f);
   unsigned long delayUs = (unsigned long)(seconds * 1e6f / total);
-  if (delayUs < MIN_STEP_DELAY_US) delayUs = MIN_STEP_DELAY_US;
+  unsigned long minDelayUs = minStepDelayUs();
+  if (delayUs < minDelayUs) delayUs = minDelayUs;
 
   // 두 모터의 스텝을 비례 배분
   long accA = 0;
@@ -516,12 +601,9 @@ bool moveTo(float xMM, float yMM, float feed) {
 void setPen(bool down) {
   if (down == penDown) return;
 
-  penServo.attach(PEN_SERVO_PIN);
-  penServo.writeMicroseconds(down ? PEN_DOWN_US : PEN_UP_US);
-  // 멈춤(!)이 와도 서보가 계속 돌지 않도록 실시간 명령을 보지 않고 기다린다
-  delay(down ? PEN_DOWN_MS : PEN_UP_MS);
-  // 정지 값(1500us)은 서보마다 조금씩 달라 천천히 돌 수 있으므로 신호를 끊어 멈춘다
-  penServo.detach();
+  penServo.write(down ? penDownAngle : penUpAngle);
+  // 펜이 다 올라가거나 내려간 뒤에 움직이도록 기다린다
+  delay(PEN_MOVE_MS);
 
   penDown = down;
 }
@@ -714,14 +796,17 @@ void setup() {
   motorA.setSpeed(5);
   motorB.setSpeed(5);
 
-  // 서보는 붙이지 않는다. 신호가 없으면 360° 서보는 멈춰 있다.
-  // (켜기 전에 펜을 올려 둔다)
-
   loadLimits();
+  loadSettings();
 
   // 저장된 위치가 있으면 이어서 쓴다. 처음 켰을 때(저장값 없음)는
   // 펜이 있는 곳이 원점 (0, 0) = 왼쪽 아래
   loadPosition();
+
+  // 펜을 올린 채로 시작한다. attach 전에 각도를 정해 두면 켜자마자 그 각도로 간다
+  penServo.write(penUpAngle);
+  penServo.attach(PEN_SERVO_PIN);
+  penDown = false;
 
   // 저장된 작업 영역을 오른쪽 / 위 끝으로 삼아, 나중에 왼쪽 / 아래 끝을
   // 다시 정해도 폭과 높이가 맞게 다시 계산되게 한다

@@ -126,6 +126,16 @@ class MainWindow(QMainWindow):
             self._button("↑ Y+", lambda: self._jog(0, 1)),
         ]
 
+        # 아두이노 설정: 최고 속도와 펜 서보 각도. 연결하면 아두이노에 저장된 값으로 채워진다
+        self._speed = self._setting_box(10, 3000, 150, " mm/분", step=10)
+        self._pen_up_angle = self._setting_box(0, 180, 90, "°")
+        self._pen_down_angle = self._setting_box(0, 180, 45, "°")
+        self._apply_settings_button = self._button("설정 적용", self._apply_machine_settings)
+        self._pen_buttons = [
+            self._button("펜 올리기", lambda: self._run_machine(["M5"], "펜 올리는 중...", "펜을 올렸습니다")),
+            self._button("펜 내리기", lambda: self._run_machine(["M3"], "펜 내리는 중...", "펜을 내렸습니다")),
+        ]
+
         self._progress = QProgressBar()
         self._progress.setFormat("%v / %m 줄")
         self._progress.setValue(0)
@@ -188,6 +198,18 @@ class MainWindow(QMainWindow):
             edge_row.addWidget(button)
         edge_row.addStretch(1)
 
+        settings_row = QHBoxLayout()
+        settings_row.addWidget(QLabel("속도:"))
+        settings_row.addWidget(self._speed)
+        settings_row.addWidget(QLabel("펜 올림 각도"))
+        settings_row.addWidget(self._pen_up_angle)
+        settings_row.addWidget(QLabel("펜 내림 각도"))
+        settings_row.addWidget(self._pen_down_angle)
+        settings_row.addWidget(self._apply_settings_button)
+        for button in self._pen_buttons:
+            settings_row.addWidget(button)
+        settings_row.addStretch(1)
+
         edge_layout = QVBoxLayout()
         edge_layout.setContentsMargins(0, 0, 0, 0)
         edge_layout.addLayout(jog_row)
@@ -201,6 +223,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(port_row)
         layout.addLayout(move_row)
         layout.addWidget(self._machine_label)
+        layout.addLayout(settings_row)
         layout.addWidget(self._edge_panel)
         layout.addLayout(views)
         layout.addLayout(buttons)
@@ -226,6 +249,15 @@ class MainWindow(QMainWindow):
         box.setRange(MIN_CELLS, MAX_MAZE_CELLS)
         box.setValue(value)
         # 클릭했을 때만 포커스를 받아, 평소에는 스페이스바가 촬영 단축키로 동작하게 한다
+        box.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        return box
+
+    def _setting_box(self, low: int, high: int, value: int, suffix: str, step: int = 1) -> QSpinBox:
+        box = QSpinBox()
+        box.setRange(low, high)
+        box.setSingleStep(step)
+        box.setValue(value)
+        box.setSuffix(suffix)
         box.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         return box
 
@@ -275,8 +307,9 @@ class MainWindow(QMainWindow):
         # 이동과 끝 설정은 연결되어 있고 그리는 중이 아닐 때만
         machine = c.select_port and connected and not connecting
         self._jog_step.setEnabled(machine)
-        for button in (*self._move_buttons, *self._jog_buttons, *self._edge_buttons):
-            button.setEnabled(machine)
+        for widget in (*self._move_buttons, *self._jog_buttons, *self._edge_buttons, *self._pen_buttons,
+                       self._speed, self._pen_up_angle, self._pen_down_angle, self._apply_settings_button):
+            widget.setEnabled(machine)
 
     # ---------- 카메라 ----------
 
@@ -540,6 +573,15 @@ class MainWindow(QMainWindow):
         # 새 작업 영역은 설정값 줄에 나온다
         self._run_machine([f"${command}"], f"{name} 기록 중...", f"{name}을(를) 설정했습니다")
 
+    def _apply_machine_settings(self) -> None:
+        # 아두이노가 EEPROM에 저장하므로 다시 켜도 유지된다. 지금 펜 상태의 각도는 바로 그 각도로 움직인다
+        commands = [
+            f"$V={self._speed.value()}",
+            f"$PU={self._pen_up_angle.value()}",
+            f"$PD={self._pen_down_angle.value()}",
+        ]
+        self._run_machine(commands, "설정 적용 중...", "설정을 적용했습니다")
+
     def _run_machine(self, commands: list[str], busy: str, done: str) -> None:
         """그림이 아닌 짧은 명령을 보낸다. 끝나면 원래 화면 상태로 돌아간다."""
         if self._sender is None or self._state in (AppState.SENDING, AppState.PAUSED):
@@ -584,6 +626,12 @@ class MainWindow(QMainWindow):
             parts.append(f"현재 위치: X {info.x_mm:.2f}, Y {info.y_mm:.2f}")
         if not info.limits_on:
             parts.append("영역 제한 꺼짐")
+        # 설정 입력칸을 아두이노에 저장된 값으로 맞춘다
+        if info.speed_mm_min is not None:
+            self._speed.setValue(round(info.speed_mm_min))
+        if info.pen_up_deg is not None and info.pen_down_deg is not None:
+            self._pen_up_angle.setValue(info.pen_up_deg)
+            self._pen_down_angle.setValue(info.pen_down_deg)
         width, height = self._cfg.work_width_mm, self._cfg.work_height_mm
         # 원점 이동이 스텝(1/80 mm) 단위라 아주 작은 차이는 무시한다
         mismatch = abs(info.width_mm - width) > 0.05 or abs(info.height_mm - height) > 0.05
