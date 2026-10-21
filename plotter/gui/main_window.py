@@ -128,8 +128,8 @@ class MainWindow(QMainWindow):
 
         # 아두이노 설정: 최고 속도와 펜 서보 각도. 연결하면 아두이노에 저장된 값으로 채워진다
         self._speed = self._setting_box(10, 3000, 150, " mm/분", step=10)
-        self._pen_up_angle = self._setting_box(0, 180, 90, "°")
-        self._pen_down_angle = self._setting_box(0, 180, 45, "°")
+        self._pen_up_angle = self._setting_box(0, 180, 45, "°")
+        self._pen_down_angle = self._setting_box(0, 180, 90, "°")
         self._apply_settings_button = self._button("설정 적용", self._apply_machine_settings)
         self._pen_buttons = [
             self._button("펜 올리기", lambda: self._run_machine(["M5"], "펜 올리는 중...", "펜을 올렸습니다")),

@@ -54,8 +54,8 @@ const uint8_t PEN_SERVO_PIN = 10;
 // 내림 각도는 펜이 종이에 막 닿는 각도로 맞춘다. 더 돌리면 랙이 종이를 계속 눌러
 // 서보가 힘을 쓴 채 멈춰 있어 뜨거워지고 전류를 많이 쓴다.
 // MG996R은 전류를 많이 써서 아두이노 5V로는 리셋될 수 있다. 가능하면 서보 전원을 따로 준다.
-const uint8_t DEFAULT_PEN_UP_ANGLE = 90;
-const uint8_t DEFAULT_PEN_DOWN_ANGLE = 45;
+const uint8_t DEFAULT_PEN_UP_ANGLE = 45;
+const uint8_t DEFAULT_PEN_DOWN_ANGLE = 90;
 // 1°씩 돌리는 간격. 펜이 종이를 찍지 않고 천천히 내려가게 한다 (45°면 약 0.2초)
 const unsigned long PEN_MS_PER_DEG = 4;
 // 다 돈 뒤 랙이 멈출 때까지 더 기다리는 시간
@@ -223,7 +223,9 @@ void saveLimits() {
 // --------------------------------------------------
 
 const int SETTINGS_ADDR = 32;  // SavedPosition 뒤
-const uint16_t SETTINGS_MAGIC = 0xB4D2;
+const uint16_t SETTINGS_MAGIC = 0xB4D3;
+// 펜 올림 / 내림 방향을 바꾸기 전에 저장된 값. 불러올 때 두 각도를 서로 바꾼다
+const uint16_t SETTINGS_MAGIC_SWAPPED_PEN = 0xB4D2;
 
 struct SavedSettings {
   uint16_t magic;
@@ -232,16 +234,22 @@ struct SavedSettings {
   uint8_t penDown;
 };
 
+void saveSettings();
+
 void loadSettings() {
   SavedSettings saved;
   EEPROM.get(SETTINGS_ADDR, saved);
 
-  if (saved.magic == SETTINGS_MAGIC &&
+  bool current = (saved.magic == SETTINGS_MAGIC);
+  bool swapped = (saved.magic == SETTINGS_MAGIC_SWAPPED_PEN);
+
+  if ((current || swapped) &&
       saved.maxSpeed >= MIN_SPEED_MM_MIN && saved.maxSpeed <= MAX_SPEED_MM_MIN &&
       saved.penUp <= 180 && saved.penDown <= 180) {
     maxSpeedMMmin = saved.maxSpeed;
-    penUpAngle = saved.penUp;
-    penDownAngle = saved.penDown;
+    penUpAngle = swapped ? saved.penDown : saved.penUp;
+    penDownAngle = swapped ? saved.penUp : saved.penDown;
+    if (swapped) saveSettings();
   }
 }
 
