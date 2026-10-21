@@ -47,13 +47,19 @@ AF_Stepper motorB(500, 2);
 Servo penServo;
 const uint8_t PEN_SERVO_PIN = 10;
 
-// MG996R (180° 각도 서보): 펜 올림 / 내림 각도로 돌린 뒤 신호를 계속 보내 그 자리를 버틴다.
+// MG996R (180° 각도 서보) + 랙 피니언: 서보 축의 피니언이 돌면 랙에 달린 펜이 위아래로 움직인다.
+// 펜이 움직이는 거리 = 피니언 반지름 x 회전 각도(라디안). 예: 반지름 10mm면 45°에 약 7.9mm.
+// 펜 올림 / 내림 각도로 돌린 뒤 신호를 계속 보내 그 자리를 버틴다.
 // 각도는 GUI($PU= / $PD=)에서 바꾸며 EEPROM에 저장된다. 아래는 처음 값.
+// 내림 각도는 펜이 종이에 막 닿는 각도로 맞춘다. 더 돌리면 랙이 종이를 계속 눌러
+// 서보가 힘을 쓴 채 멈춰 있어 뜨거워지고 전류를 많이 쓴다.
 // MG996R은 전류를 많이 써서 아두이노 5V로는 리셋될 수 있다. 가능하면 서보 전원을 따로 준다.
 const uint8_t DEFAULT_PEN_UP_ANGLE = 90;
 const uint8_t DEFAULT_PEN_DOWN_ANGLE = 45;
-// 서보가 각도까지 도는 동안 기다리는 시간 (MG996R은 60°에 약 0.2초)
-const unsigned long PEN_MOVE_MS = 300;
+// 1°씩 돌리는 간격. 펜이 종이를 찍지 않고 천천히 내려가게 한다 (45°면 약 0.2초)
+const unsigned long PEN_MS_PER_DEG = 4;
+// 다 돈 뒤 랙이 멈출 때까지 더 기다리는 시간
+const unsigned long PEN_SETTLE_MS = 100;
 
 uint8_t penUpAngle = DEFAULT_PEN_UP_ANGLE;
 uint8_t penDownAngle = DEFAULT_PEN_DOWN_ANGLE;
@@ -330,6 +336,7 @@ void redefinePosition(long x, long y) {
 }
 
 uint8_t executeLine(char* line);
+void movePenServo(uint8_t target);
 
 // "150"처럼 숫자만 있는지 읽는다. 숫자가 아니면 false
 bool readSettingValue(char* text, float& value) {
@@ -436,10 +443,7 @@ uint8_t executeSetting(char* cmd) {
     if (down) penDownAngle = (uint8_t)lroundf(value);
     else penUpAngle = (uint8_t)lroundf(value);
     saveSettings();
-    if (penDown == down) {
-      penServo.write(down ? penDownAngle : penUpAngle);
-      delay(PEN_MOVE_MS);
-    }
+    if (penDown == down) movePenServo(down ? penDownAngle : penUpAngle);
     printLimits();
     return 0;
   }
@@ -598,12 +602,24 @@ bool moveTo(float xMM, float yMM, float feed) {
 // 펜 (서보)
 // --------------------------------------------------
 
+// 서보를 목표 각도까지 1°씩 돌린다. 펜이 다 올라가거나 내려간 뒤에 돌아온다.
+// 멈춤(!)이 와도 펜이 중간에 서지 않도록 실시간 명령을 보지 않고 기다린다
+void movePenServo(uint8_t target) {
+  int angle = penServo.read();  // 마지막으로 보낸 각도
+
+  while (angle != target) {
+    angle += (target > angle) ? 1 : -1;
+    penServo.write(angle);
+    delay(PEN_MS_PER_DEG);
+  }
+
+  delay(PEN_SETTLE_MS);
+}
+
 void setPen(bool down) {
   if (down == penDown) return;
 
-  penServo.write(down ? penDownAngle : penUpAngle);
-  // 펜이 다 올라가거나 내려간 뒤에 움직이도록 기다린다
-  delay(PEN_MOVE_MS);
+  movePenServo(down ? penDownAngle : penUpAngle);
 
   penDown = down;
 }
